@@ -15,3 +15,8 @@ add_executable(test_arena test_arena.c)
 target_include_directories(test_arena PRIVATE ${CRITERION_INCLUDE_DIR})
 target_link_libraries(test_arena PRIVATE kiln_core ${CRITERION_LIBRARY} m)
 add_test(NAME arena COMMAND test_arena)
+
+add_executable(test_math test_math.c)
+target_include_directories(test_math PRIVATE ${CRITERION_INCLUDE_DIR})
+target_link_libraries(test_math PRIVATE kiln_core ${CRITERION_LIBRARY} m)
+add_test(NAME math COMMAND test_math)

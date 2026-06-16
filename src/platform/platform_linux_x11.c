@@ -141,3 +141,11 @@ void window_size(const window_t *window, uint32_t *width, uint32_t *height) {
         *height = window->height;
     }
 }
+
+void *window_x11_display(const window_t *window) {
+    return window->display;
+}
+
+unsigned long window_x11_window(const window_t *window) {
+    return window->handle;
+}

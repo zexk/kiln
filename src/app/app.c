@@ -4,6 +4,9 @@
 #include "render.h"
 #include "assets.h"
 
+#include <stdint.h>
+#include <stdlib.h>
+
 bool app_init(app_t *app) {
     core_init();
 
@@ -14,18 +17,23 @@ bool app_init(app_t *app) {
         return false;
     }
 
-    render_init();
+    if (!render_init(app->window)) {
+        return false;
+    }
     assets_init();
 
     return true;
 }
 
 void app_run(app_t *app) {
+    /* KILN_MAX_FRAMES=N runs N frames then exits cleanly — lets a headless or
+       bounded run capture validation output without a hanging window. */
+    const char *cap = getenv("KILN_MAX_FRAMES");
+    uint64_t max_frames = cap ? strtoull(cap, NULL, 10) : 0;
+    uint64_t frames = 0;
+
     bool running = true;
     while (running) {
-        /* Idle without spinning until the OS has something for us. */
-        window_wait_events(app->window);
-
         event_t event;
         while (window_poll_event(app->window, &event)) {
             switch (event.type) {
@@ -41,10 +49,17 @@ void app_run(app_t *app) {
                 break;
             }
         }
+
+        render_draw();
+
+        if (max_frames && ++frames >= max_frames) {
+            running = false;
+        }
     }
 }
 
 void app_shutdown(app_t *app) {
+    render_shutdown();
     window_destroy(app->window);
     world_destroy(app->world);
 }

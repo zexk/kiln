@@ -56,3 +56,9 @@ bool window_poll_event(window_t *window, event_t *out);
 void window_wait_events(window_t *window);
 
 void window_size(const window_t *window, uint32_t *width, uint32_t *height);
+
+/* Native X11 handles for VkXlibSurfaceKHR creation. Returned as void* and
+   unsigned long so callers need not include Xlib; the renderer casts the
+   display back to Display* and the window to an XID. */
+void *window_x11_display(const window_t *window);
+unsigned long window_x11_window(const window_t *window);

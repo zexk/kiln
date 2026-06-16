@@ -49,6 +49,9 @@
             spirv-tools
           ];
           shellHook = ''
+            # The validation layers are on PATH but the Vulkan loader can't find
+            # their manifests without this — otherwise it silently runs none.
+            export VK_LAYER_PATH="${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d"
             echo "Kiln dev shell"
           '';
         };

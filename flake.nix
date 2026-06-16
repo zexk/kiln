@@ -13,7 +13,8 @@
 
         nativeBuildInputs = with pkgs; [
           gcc
-          gnumake
+          cmake
+          ninja
           pkg-config
         ];
 
@@ -28,6 +29,13 @@
       in
       {
         formatter = pkgs.nixpkgs-fmt;
+
+        packages.default = pkgs.stdenv.mkDerivation {
+          pname = "kiln";
+          version = "0.1.0";
+          src = ./.;
+          inherit nativeBuildInputs buildInputs;
+        };
 
         devShells.default = pkgs.mkShell {
           inherit nativeBuildInputs buildInputs;

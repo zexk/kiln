@@ -10,3 +10,8 @@ add_executable(test_ecs test_ecs.c)
 target_include_directories(test_ecs PRIVATE ${CRITERION_INCLUDE_DIR})
 target_link_libraries(test_ecs PRIVATE kiln_ecs ${CRITERION_LIBRARY} m)
 add_test(NAME ecs COMMAND test_ecs)
+
+add_executable(test_arena test_arena.c)
+target_include_directories(test_arena PRIVATE ${CRITERION_INCLUDE_DIR})
+target_link_libraries(test_arena PRIVATE kiln_core ${CRITERION_LIBRARY} m)
+add_test(NAME arena COMMAND test_arena)

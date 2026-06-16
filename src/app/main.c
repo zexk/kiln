@@ -7,8 +7,12 @@
 int main(void) {
     core_init();
     platform_init();
-    ecs_init();
+
+    world_t *world = world_create();
+
     render_init();
     assets_init();
+
+    world_destroy(world);
     return 0;
 }

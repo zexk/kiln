@@ -26,6 +26,8 @@
           shaderc
           stb
         ];
+
+        checkInputs = [ pkgs.criterion ];
       in
       {
         formatter = pkgs.nixpkgs-fmt;
@@ -34,11 +36,13 @@
           pname = "kiln";
           version = "0.1.0";
           src = ./.;
-          inherit nativeBuildInputs buildInputs;
+          inherit nativeBuildInputs buildInputs checkInputs;
+          doCheck = true;
         };
 
         devShells.default = pkgs.mkShell {
-          inherit nativeBuildInputs buildInputs;
+          inherit nativeBuildInputs;
+          buildInputs = buildInputs ++ checkInputs;
           packages = with pkgs; [
             gdb
             vulkan-validation-layers

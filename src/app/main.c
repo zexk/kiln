@@ -1,18 +1,13 @@
-#include "core.h"
-#include "platform.h"
-#include "ecs.h"
-#include "render.h"
-#include "assets.h"
+#include "app.h"
 
 int main(void) {
-    core_init();
-    platform_init();
+    app_t app = {0};
 
-    world_t *world = world_create();
+    if (!app_init(&app)) {
+        return 1;
+    }
 
-    render_init();
-    assets_init();
-
-    world_destroy(world);
+    app_run(&app);
+    app_shutdown(&app);
     return 0;
 }

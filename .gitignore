@@ -1,0 +1,11 @@
+build/
+*.o
+*.d
+
+# Nix
+result
+result-*
+
+# Editor / OS
+*.swp
+.DS_Store

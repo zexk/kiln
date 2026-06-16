@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "arena.h"
 #include "archetype.h"
 #include "component.h"
 #include "entity.h"
@@ -14,6 +15,12 @@ typedef struct {
 } entity_loc_t;
 
 typedef struct world {
+    /* owns all create-once structural allocations: the world itself, archetype
+       structs, and their column-pointer arrays. Freed wholesale at teardown.
+       Per-entity growable storage (columns' data, entities, the arrays below)
+       stays on the heap since the bump arena can't reclaim individual grows. */
+    arena_t *arena;
+
     component_info_t components[ECS_MAX_COMPONENTS];
     component_id_t component_count;
 

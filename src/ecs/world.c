@@ -5,7 +5,9 @@
 #include <string.h>
 
 world_t *world_create(void) {
-    world_t *world = calloc(1, sizeof(world_t));
+    arena_t *arena = arena_create(0);
+    world_t *world = arena_calloc(arena, 1, sizeof(world_t));
+    world->arena = arena;
 
     signature_t empty;
     signature_clear(&empty);
@@ -20,6 +22,10 @@ world_t *world_create(void) {
 }
 
 void world_destroy(world_t *world) {
+    /* the world lives inside its own arena, so grab the handle before freeing */
+    arena_t *arena = world->arena;
+
+    /* release the heap-backed growable buffers the arena does not own */
     for (uint32_t i = 0; i < world->archetype_count; i++) {
         archetype_destroy(world->archetypes[i]);
     }
@@ -27,7 +33,9 @@ void world_destroy(world_t *world) {
     free(world->locations);
     free(world->generations);
     free(world->free_indices);
-    free(world);
+
+    /* frees the world, every archetype struct, and their column-pointer arrays */
+    arena_destroy(arena);
 }
 
 component_id_t component_register(world_t *world, const char *name, size_t size, size_t align) {

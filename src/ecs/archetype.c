@@ -6,7 +6,9 @@
 #include "world.h"
 
 archetype_t *archetype_create(world_t *world, signature_t signature) {
-    archetype_t *a = calloc(1, sizeof(archetype_t));
+    /* the struct and its column-pointer array are create-once and live for the
+       world's lifetime, so they come from the world arena, not the heap */
+    archetype_t *a = arena_calloc(world->arena, 1, sizeof(archetype_t));
     a->signature = signature;
 
     for (component_id_t id = 0; id < world->component_count; id++) {
@@ -16,19 +18,19 @@ archetype_t *archetype_create(world_t *world, signature_t signature) {
     }
 
     if (a->component_count > 0) {
-        a->columns = calloc(a->component_count, sizeof(void *));
+        a->columns = arena_calloc(world->arena, a->component_count, sizeof(void *));
     }
 
     return a;
 }
 
 void archetype_destroy(archetype_t *archetype) {
+    /* only the per-row growable buffers are heap-backed; the struct and the
+       columns pointer array are owned by the world arena */
     for (uint32_t i = 0; i < archetype->component_count; i++) {
         free(archetype->columns[i]);
     }
-    free(archetype->columns);
     free(archetype->entities);
-    free(archetype);
 }
 
 int archetype_column_index(const archetype_t *archetype, component_id_t id) {

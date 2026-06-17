@@ -48,16 +48,16 @@ void ui_begin(ui_t *ui, const ui_input_t *in, float screen_w,
     ui->id_counter = 0;
     ui->pointer_in_panel = false;
     ui->panel_index = 0;
-
-    /* A drag that began on a widget ends when the button is released, even if
-       the pointer left the widget. */
-    if (ui->active_id != 0 && !in->mouse_down) {
-        ui->active_id = 0;
-    }
 }
 
 void ui_end(ui_t *ui) {
-    (void)ui;
+    /* Safety net: if the button was released this frame but the active widget
+       was not emitted (e.g. its panel collapsed), no widget cleared active_id.
+       Do it here — after every widget has had a chance to observe went_up, so
+       button/checkbox clicks aren't swallowed before they register. */
+    if (ui->active_id != 0 && !ui->in.mouse_down) {
+        ui->active_id = 0;
+    }
 }
 
 bool ui_wants_mouse(const ui_t *ui) {

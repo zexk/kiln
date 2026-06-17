@@ -32,6 +32,15 @@ typedef struct {
     mesh_handle_t mesh;
     material_handle_t material;
     float scale; /* uniform normalize-to-~2-units scale; mesh is pre-centred */
+
+    /* CPU geometry kept for ray picking — the recentred, unscaled local-space
+       triangles (the GPU copy is freed after upload). pick_min/max is the local
+       AABB used as a broadphase before the per-triangle test. */
+    vec3_t *pick_pos;
+    uint32_t pick_vcount;
+    uint32_t *pick_idx;
+    uint32_t pick_icount;
+    vec3_t pick_min, pick_max;
 } prototype_t;
 
 #define APP_MAX_PROTOTYPES 16
@@ -49,6 +58,15 @@ typedef struct {
     bool ui_capture; /* UI owned the mouse last frame; gates camera input */
     float mouse_x, mouse_y;
     bool mouse_left;
+
+    /* Left-click selection. A press that neither the UI nor the gizmo claims
+       arms a pick; we accumulate pointer motion while held (reliable even when
+       the cursor is captured for orbit) and, if the release barely moved, cast a
+       ray through the press pixel. */
+    bool pick_armed;
+    float pick_down_x, pick_down_y; /* press pixel (cursor still un-warped) */
+    float pick_drag;                /* summed |motion| since the press */
+    bool pick_request;              /* a click is awaiting its ray cast */
 
     /* crude editor: spawnable templates + the currently selected instance */
     prototype_t prototypes[APP_MAX_PROTOTYPES];

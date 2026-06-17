@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 /* Where models/textures live, resolved at runtime (env override, else the
@@ -74,6 +75,18 @@ static int add_prototype(app_t *app, const char *name, cpu_mesh_t *m,
     p->mesh = mesh;
     p->material = mat;
     p->scale = (max_dim > 1e-6f) ? 2.0f / max_dim : 1.0f;
+
+    /* Keep a local-space triangle copy for picking (positions + indices), plus
+       the recentred AABB for broadphase. */
+    p->pick_vcount = m->vertex_count;
+    p->pick_pos = malloc(sizeof(vec3_t) * m->vertex_count);
+    for (uint32_t i = 0; i < m->vertex_count; i++) {
+        p->pick_pos[i] = m->vertices[i].position;
+    }
+    p->pick_icount = m->index_count;
+    p->pick_idx = malloc(sizeof(uint32_t) * m->index_count);
+    memcpy(p->pick_idx, m->indices, sizeof(uint32_t) * m->index_count);
+    cpu_mesh_bounds(m, &p->pick_min, &p->pick_max); /* recentred bounds */
     return app->prototype_count++;
 }
 
@@ -271,6 +284,15 @@ static int collect_entities(app_t *app, entity_t *out, int max) {
     return n;
 }
 
+static prototype_t *prototype_for_mesh(app_t *app, mesh_handle_t mesh) {
+    for (int i = 0; i < app->prototype_count; i++) {
+        if (app->prototypes[i].mesh == mesh) {
+            return &app->prototypes[i];
+        }
+    }
+    return NULL;
+}
+
 static const char *selected_name(app_t *app) {
     if (app->selected == ECS_ENTITY_NULL ||
         !entity_is_alive(app->world, app->selected)) {
@@ -278,14 +300,176 @@ static const char *selected_name(app_t *app) {
     }
     renderable_t *r =
         entity_get_component(app->world, app->selected, app->renderable_id);
-    if (r) {
-        for (int i = 0; i < app->prototype_count; i++) {
-            if (app->prototypes[i].mesh == r->mesh) {
-                return app->prototypes[i].name;
+    prototype_t *p = r ? prototype_for_mesh(app, r->mesh) : NULL;
+    return p ? p->name : "?";
+}
+
+/* Möller-Trumbore, double-sided. Returns the ray parameter t (>0) at the hit.
+   The ray need not be unit length; t is then measured in units of |dir|. */
+static bool ray_triangle(vec3_t o, vec3_t dir, vec3_t a, vec3_t b, vec3_t c,
+                         float *out_t) {
+    vec3_t e1 = vec3_sub(b, a);
+    vec3_t e2 = vec3_sub(c, a);
+    vec3_t pv = vec3_cross(dir, e2);
+    float det = vec3_dot(e1, pv);
+    if (det > -1e-8f && det < 1e-8f) {
+        return false; /* ray parallel to the triangle plane */
+    }
+    float inv_det = 1.0f / det;
+    vec3_t tv = vec3_sub(o, a);
+    float u = vec3_dot(tv, pv) * inv_det;
+    if (u < 0.0f || u > 1.0f) {
+        return false;
+    }
+    vec3_t qv = vec3_cross(tv, e1);
+    float v = vec3_dot(dir, qv) * inv_det;
+    if (v < 0.0f || u + v > 1.0f) {
+        return false;
+    }
+    float t = vec3_dot(e2, qv) * inv_det;
+    if (t < 0.0f) {
+        return false;
+    }
+    *out_t = t;
+    return true;
+}
+
+/* Slab test: does the ray reach the AABB at some t >= 0? */
+static bool ray_aabb(vec3_t o, vec3_t dir, vec3_t mn, vec3_t mx) {
+    float ro[3] = {o.x, o.y, o.z};
+    float rd[3] = {dir.x, dir.y, dir.z};
+    float lo[3] = {mn.x, mn.y, mn.z};
+    float hi[3] = {mx.x, mx.y, mx.z};
+    float tmin = 0.0f, tmax = 1e30f;
+    for (int i = 0; i < 3; i++) {
+        if (rd[i] > -1e-8f && rd[i] < 1e-8f) {
+            if (ro[i] < lo[i] || ro[i] > hi[i]) {
+                return false; /* parallel and outside the slab */
+            }
+        } else {
+            float inv = 1.0f / rd[i];
+            float t1 = (lo[i] - ro[i]) * inv;
+            float t2 = (hi[i] - ro[i]) * inv;
+            if (t1 > t2) {
+                float tmp = t1;
+                t1 = t2;
+                t2 = tmp;
+            }
+            tmin = t1 > tmin ? t1 : tmin;
+            tmax = t2 < tmax ? t2 : tmax;
+            if (tmin > tmax) {
+                return false;
             }
         }
     }
-    return "?";
+    return true;
+}
+
+/* Cast a world-space ray against every renderable's triangles and return the
+   nearest hit entity, or ECS_ENTITY_NULL if the ray misses everything. The ray
+   is pushed into each entity's local space (so the test runs against the stored
+   geometry); the local direction is left un-normalized so the returned t stays
+   in world units and is comparable across entities. */
+static entity_t pick_entity(app_t *app, vec3_t origin, vec3_t dir) {
+    entity_t best = ECS_ENTITY_NULL;
+    float best_t = 1e30f;
+    query_iter_t it = renderable_query(app);
+    while (query_next(&it)) {
+        transform_t *t = query_get(&it, app->transform_id);
+        renderable_t *r = query_get(&it, app->renderable_id);
+        prototype_t *p = prototype_for_mesh(app, r->mesh);
+        if (!p || !p->pick_pos) {
+            continue;
+        }
+        mat4_t inv =
+            mat4_inverse(mat4_from_trs(t->position, t->rotation, t->scale));
+        vec3_t lo = mat4_transform_point(inv, origin);
+        vec3_t ld = mat4_transform_dir(inv, dir);
+        if (!ray_aabb(lo, ld, p->pick_min, p->pick_max)) {
+            continue;
+        }
+        entity_t e = query_entity(&it);
+        for (uint32_t i = 0; i + 2 < p->pick_icount; i += 3) {
+            vec3_t a = p->pick_pos[p->pick_idx[i]];
+            vec3_t b = p->pick_pos[p->pick_idx[i + 1]];
+            vec3_t c = p->pick_pos[p->pick_idx[i + 2]];
+            float ht;
+            if (ray_triangle(lo, ld, a, b, c, &ht) && ht < best_t) {
+                best_t = ht;
+                best = e;
+            }
+        }
+    }
+    return best;
+}
+
+/* Cast a ray through a screen pixel and make the hit entity the selection
+   (clicking empty space clears it). */
+static void pick_at(app_t *app, float px, float py) {
+    uint32_t w, h;
+    window_size(app->window, &w, &h);
+    float aspect = h ? (float)w / (float)h : 1.0f;
+    vec3_t origin, dir;
+    camera_ray(&app->camera, aspect, px, py, (float)w, (float)h, &origin,
+               &dir);
+    app->selected = pick_entity(app, origin, dir);
+}
+
+/* World point -> overlay pixels, same convention as the gizmo's project(). */
+static bool project_point(const app_t *app, float aspect, float sw, float sh,
+                          vec3_t world, float *ox, float *oy) {
+    mat4_t vp =
+        mat4_mul(camera_proj(&app->camera, aspect), camera_view(&app->camera));
+    vec4_t c = mat4_mul_vec4(vp, (vec4_t){world.x, world.y, world.z, 1.0f});
+    if (c.w <= 1e-5f) {
+        return false;
+    }
+    *ox = (c.x / c.w * 0.5f + 0.5f) * sw;
+    *oy = (1.0f - (c.y / c.w * 0.5f + 0.5f)) * sh;
+    return true;
+}
+
+/* Headless check that camera_ray round-trips the projection: project each
+   entity's centre to a pixel, cast a ray back through it, and confirm the pick
+   lands on that entity. Catches a flipped axis or a bad inverse before any
+   click. Runs when KILN_PICK_TEST is set. */
+static void run_pick_selftest(app_t *app) {
+    uint32_t w, h;
+    window_size(app->window, &w, &h);
+    float aspect = h ? (float)w / (float)h : 1.0f;
+
+    int total = 0, pass = 0;
+    query_iter_t it = renderable_query(app);
+    while (query_next(&it)) {
+        transform_t *t = query_get(&it, app->transform_id);
+        entity_t e = query_entity(&it);
+        float sx, sy;
+        if (!project_point(app, aspect, (float)w, (float)h, t->position, &sx,
+                           &sy)) {
+            continue;
+        }
+        vec3_t origin, dir;
+        camera_ray(&app->camera, aspect, sx, sy, (float)w, (float)h, &origin,
+                   &dir);
+        entity_t hit = pick_entity(app, origin, dir);
+        total++;
+        if (hit == e) {
+            pass++;
+        } else {
+            printf("  PICK MISS: entity %lu at px (%.1f, %.1f) -> %lu\n",
+                   (unsigned long)e, (double)sx, (double)sy,
+                   (unsigned long)hit);
+        }
+    }
+
+    /* A corner pixel should hit nothing — exercises the miss / deselect path. */
+    vec3_t corner_o, corner_d;
+    camera_ray(&app->camera, aspect, 5.0f, 5.0f, (float)w, (float)h, &corner_o,
+               &corner_d);
+    bool corner_miss = pick_entity(app, corner_o, corner_d) == ECS_ENTITY_NULL;
+
+    printf("PICK selftest: %d/%d entities round-tripped, corner-miss %s\n", pass,
+           total, corner_miss ? "OK" : "FAIL");
 }
 
 /* Build the diagnostics / tamper panel and record whether it owns the mouse. */
@@ -388,6 +572,10 @@ void app_run(app_t *app) {
     uint64_t max_frames = cap ? strtoull(cap, NULL, 10) : 0;
     uint64_t frames = 0;
 
+    if (getenv("KILN_PICK_TEST")) {
+        run_pick_selftest(app);
+    }
+
     struct timespec prev;
     clock_gettime(CLOCK_MONOTONIC, &prev);
 
@@ -407,15 +595,36 @@ void app_run(app_t *app) {
             case EVENT_MOUSE_MOVE:
                 app->mouse_x = (float)event.motion.x;
                 app->mouse_y = (float)event.motion.y;
+                /* Accumulate motion via deltas (valid even under cursor capture)
+                   so a click can be told apart from an orbit drag. */
+                if (app->pick_armed) {
+                    app->pick_drag += (float)(abs(event.motion.dx) +
+                                              abs(event.motion.dy));
+                }
                 break;
             case EVENT_BUTTON_DOWN:
                 if (event.button.button == MOUSE_BUTTON_LEFT) {
                     app->mouse_left = true;
+                    /* Arm a pick only when nothing else owns the mouse; record
+                       the press pixel while the cursor is still un-warped. */
+                    if (!app->ui_capture && !app->gizmo_capture) {
+                        app->pick_armed = true;
+                        app->pick_down_x = app->mouse_x;
+                        app->pick_down_y = app->mouse_y;
+                        app->pick_drag = 0.0f;
+                    }
                 }
                 break;
             case EVENT_BUTTON_UP:
                 if (event.button.button == MOUSE_BUTTON_LEFT) {
                     app->mouse_left = false;
+                    /* A near-stationary release that nothing else grabbed is a
+                       selection click. */
+                    if (app->pick_armed && app->pick_drag < 5.0f &&
+                        !app->ui_capture && !app->gizmo_capture) {
+                        app->pick_request = true;
+                    }
+                    app->pick_armed = false;
                 }
                 break;
             default:
@@ -455,6 +664,11 @@ void app_run(app_t *app) {
             rotate_system(app, dt);
         }
 
+        if (app->pick_request) {
+            app->pick_request = false;
+            pick_at(app, app->pick_down_x, app->pick_down_y);
+        }
+
         render_scene(app);
         update_gizmo(app);
         build_ui(app);
@@ -467,6 +681,10 @@ void app_run(app_t *app) {
 }
 
 void app_shutdown(app_t *app) {
+    for (int i = 0; i < app->prototype_count; i++) {
+        free(app->prototypes[i].pick_pos);
+        free(app->prototypes[i].pick_idx);
+    }
     render_shutdown();
     window_destroy(app->window);
     world_destroy(app->world);

@@ -38,3 +38,10 @@ bool camera_is_navigating(const camera_t *cam);
 vec3_t camera_eye(const camera_t *cam);
 mat4_t camera_view(const camera_t *cam);
 mat4_t camera_proj(const camera_t *cam, float aspect);
+
+/* Build a world-space ray through a screen pixel (top-left origin, +y down — the
+   same convention the renderer/gizmo use). The ray starts on the near plane and
+   points into the scene; `out_dir` is unit length. Used for mouse picking. */
+void camera_ray(const camera_t *cam, float aspect, float screen_x,
+                float screen_y, float screen_w, float screen_h,
+                vec3_t *out_origin, vec3_t *out_dir);

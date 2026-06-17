@@ -41,6 +41,26 @@ mat4_t camera_proj(const camera_t *cam, float aspect) {
     return mat4_perspective(cam->fov, aspect, cam->near, cam->far);
 }
 
+void camera_ray(const camera_t *cam, float aspect, float screen_x,
+                float screen_y, float screen_w, float screen_h,
+                vec3_t *out_origin, vec3_t *out_dir) {
+    /* Invert the same view-projection the renderer draws with. Pixel -> NDC uses
+       the renderer's screen flip (+y down), so it round-trips the gizmo's
+       world->screen project(). Vulkan clip depth is [0,1]: near z=0, far z=1. */
+    mat4_t inv =
+        mat4_inverse(mat4_mul(camera_proj(cam, aspect), camera_view(cam)));
+    float ndc_x = 2.0f * screen_x / screen_w - 1.0f;
+    float ndc_y = 1.0f - 2.0f * screen_y / screen_h;
+
+    vec4_t nh = mat4_mul_vec4(inv, (vec4_t){ndc_x, ndc_y, 0.0f, 1.0f});
+    vec4_t fh = mat4_mul_vec4(inv, (vec4_t){ndc_x, ndc_y, 1.0f, 1.0f});
+    vec3_t near = vec3_scale((vec3_t){nh.x, nh.y, nh.z}, 1.0f / nh.w);
+    vec3_t far = vec3_scale((vec3_t){fh.x, fh.y, fh.z}, 1.0f / fh.w);
+
+    *out_origin = near;
+    *out_dir = vec3_normalize(vec3_sub(far, near));
+}
+
 static void orbit(camera_t *cam, int dx, int dy) {
     cam->yaw -= (float)dx * ORBIT_SENSITIVITY;
     cam->pitch += (float)dy * ORBIT_SENSITIVITY;

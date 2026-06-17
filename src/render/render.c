@@ -68,6 +68,14 @@ typedef struct {
     float base_color[4];
 } material_ubo_t;
 
+/* Per-frame scene uniform: light direction, key-light colour and ambient fill.
+   All vec4 so std140 packing is trivial (no hidden padding between members). */
+typedef struct {
+    float light_dir[4];     /* xyz: unit direction toward the key light */
+    float light_color[4];   /* xyz: RGB intensity of the key light */
+    float ambient_color[4]; /* xyz: ambient fill RGB */
+} scene_ubo_t;
+
 /* One queued draw: which mesh + material, plus the matrices the shader needs. */
 typedef struct {
     mesh_handle_t mesh;
@@ -130,6 +138,14 @@ static struct {
     VkDescriptorPool descriptor_pool;
     gpu_material_t materials[MAX_MATERIALS];
     uint32_t material_count;
+
+    scene_ubo_t scene_data;
+    VkDescriptorSetLayout scene_set_layout;
+    VkDescriptorPool scene_pool;
+    VkBuffer scene_ubo_buf[MAX_FRAMES_IN_FLIGHT];
+    VkDeviceMemory scene_ubo_mem[MAX_FRAMES_IN_FLIGHT];
+    void *scene_ubo_mapped[MAX_FRAMES_IN_FLIGHT];
+    VkDescriptorSet scene_sets[MAX_FRAMES_IN_FLIGHT];
 
     /* Mesh draws queued this frame; drained in record_command_buffer. */
     mat4_t view;
@@ -685,6 +701,74 @@ static bool create_material_infra(void) {
 }
 
 /* ----------------------------------------------------------------------- */
+/* scene UBO: per-frame light direction, colour, ambient                    */
+/* ----------------------------------------------------------------------- */
+
+static bool create_scene_infra(void) {
+    g.scene_data = (scene_ubo_t){
+        .light_dir     = {0.397f, 0.847f, 0.348f, 0.0f},
+        .light_color   = {1.0f,   1.0f,   1.0f,   0.0f},
+        .ambient_color = {0.16f,  0.18f,  0.24f,  0.0f},
+    };
+
+    VkDescriptorSetLayoutBinding binding = {0};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layout_ci = {0};
+    layout_ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout_ci.bindingCount = 1;
+    layout_ci.pBindings = &binding;
+    VK_CHECK(vkCreateDescriptorSetLayout(g.device, &layout_ci, NULL,
+                                         &g.scene_set_layout));
+
+    VkDescriptorPoolSize pool_size = {0};
+    pool_size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_size.descriptorCount = MAX_FRAMES_IN_FLIGHT;
+
+    VkDescriptorPoolCreateInfo pool_ci = {0};
+    pool_ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_ci.maxSets = MAX_FRAMES_IN_FLIGHT;
+    pool_ci.poolSizeCount = 1;
+    pool_ci.pPoolSizes = &pool_size;
+    VK_CHECK(vkCreateDescriptorPool(g.device, &pool_ci, NULL, &g.scene_pool));
+
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        if (!create_buffer(sizeof(scene_ubo_t), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           &g.scene_ubo_buf[i], &g.scene_ubo_mem[i])) {
+            return false;
+        }
+        VK_CHECK(vkMapMemory(g.device, g.scene_ubo_mem[i], 0,
+                             sizeof(scene_ubo_t), 0, &g.scene_ubo_mapped[i]));
+
+        VkDescriptorSetAllocateInfo alloc = {0};
+        alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        alloc.descriptorPool = g.scene_pool;
+        alloc.descriptorSetCount = 1;
+        alloc.pSetLayouts = &g.scene_set_layout;
+        VK_CHECK(vkAllocateDescriptorSets(g.device, &alloc, &g.scene_sets[i]));
+
+        VkDescriptorBufferInfo buf_info = {0};
+        buf_info.buffer = g.scene_ubo_buf[i];
+        buf_info.range  = sizeof(scene_ubo_t);
+
+        VkWriteDescriptorSet write = {0};
+        write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet          = g.scene_sets[i];
+        write.dstBinding      = 0;
+        write.descriptorCount = 1;
+        write.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        write.pBufferInfo     = &buf_info;
+        vkUpdateDescriptorSets(g.device, 1, &write, 0, NULL);
+    }
+    return true;
+}
+
+/* ----------------------------------------------------------------------- */
 /* pipeline                                                                  */
 /* ----------------------------------------------------------------------- */
 
@@ -785,10 +869,12 @@ static bool create_pipeline(void) {
     push.offset = 0;
     push.size = sizeof(mesh_push_t);
 
+    VkDescriptorSetLayout set_layouts[] = {g.material_set_layout,
+                                           g.scene_set_layout};
     VkPipelineLayoutCreateInfo layout = {0};
     layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layout.setLayoutCount = 1;
-    layout.pSetLayouts = &g.material_set_layout;
+    layout.setLayoutCount = 2;
+    layout.pSetLayouts = set_layouts;
     layout.pushConstantRangeCount = 1;
     layout.pPushConstantRanges = &push;
     VK_CHECK(
@@ -1203,6 +1289,19 @@ void render_set_clear_color(float r, float g_, float b) {
     g.clear_color[2] = b;
 }
 
+void render_set_light(vec3_t dir, vec3_t color, vec3_t ambient) {
+    vec3_t n = vec3_normalize(dir);
+    g.scene_data.light_dir[0]     = n.x;
+    g.scene_data.light_dir[1]     = n.y;
+    g.scene_data.light_dir[2]     = n.z;
+    g.scene_data.light_color[0]   = color.x;
+    g.scene_data.light_color[1]   = color.y;
+    g.scene_data.light_color[2]   = color.z;
+    g.scene_data.ambient_color[0] = ambient.x;
+    g.scene_data.ambient_color[1] = ambient.y;
+    g.scene_data.ambient_color[2] = ambient.z;
+}
+
 static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
                                   uint32_t instance_count,
                                   uint32_t text_verts) {
@@ -1267,6 +1366,11 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipeline);
+
+    memcpy(g.scene_ubo_mapped[g.frame], &g.scene_data, sizeof(g.scene_data));
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            g.pipeline_layout, 1, 1,
+                            &g.scene_sets[g.frame], 0, NULL);
 
     for (uint32_t i = 0; i < instance_count; i++) {
         const mesh_instance_t *inst = &g.instances[i];
@@ -1339,8 +1443,9 @@ bool render_init(window_t *window) {
 
     if (!create_instance() || !create_surface() || !pick_physical_device() ||
         !create_device() || !create_swapchain() || !create_depth_resources() ||
-        !create_material_infra() || !create_pipeline() ||
-        !create_text_pipeline() || !create_commands_and_sync()) {
+        !create_material_infra() || !create_scene_infra() ||
+        !create_pipeline() || !create_text_pipeline() ||
+        !create_commands_and_sync()) {
         return false;
     }
 
@@ -1651,6 +1756,13 @@ void render_shutdown(void) {
     vkDestroySampler(g.device, g.sampler, NULL);
     vkDestroyDescriptorPool(g.device, g.descriptor_pool, NULL);
     vkDestroyDescriptorSetLayout(g.device, g.material_set_layout, NULL);
+
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroyBuffer(g.device, g.scene_ubo_buf[i], NULL);
+        vkFreeMemory(g.device, g.scene_ubo_mem[i], NULL);
+    }
+    vkDestroyDescriptorPool(g.device, g.scene_pool, NULL);
+    vkDestroyDescriptorSetLayout(g.device, g.scene_set_layout, NULL);
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroyBuffer(g.device, g.text_buffer[i], NULL);

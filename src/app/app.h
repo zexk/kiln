@@ -84,6 +84,12 @@ typedef struct {
     float spin_speed;
     float bg_color[3];
 
+    /* directional light, set each frame from these spherical coordinates */
+    float light_yaw;         /* degrees: horizontal rotation of the sun */
+    float light_pitch;       /* degrees: elevation above the horizon (0–90) */
+    float light_intensity;   /* key-light brightness multiplier */
+    float ambient_intensity; /* ambient fill brightness multiplier */
+
     /* scene persistence: brief status line shown in the panel */
     char scene_status[64];
 } app_t;

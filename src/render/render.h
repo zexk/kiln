@@ -68,6 +68,11 @@ void render_line(float x0, float y0, float x1, float y1, float thickness,
 /* Set the framebuffer clear colour (default a dark blue-grey). Persists. */
 void render_set_clear_color(float r, float g, float b);
 
+/* Set the directional light for the next frame. `dir` need not be unit length.
+   `color` is the key-light RGB (multiply by intensity before passing in).
+   `ambient` is the ambient fill RGB. Both persist until overwritten. */
+void render_set_light(vec3_t dir, vec3_t color, vec3_t ambient);
+
 /* Acquire, record and present one frame. Recreates the swapchain
    transparently when the window is resized. */
 void render_draw(void);

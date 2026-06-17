@@ -12,6 +12,7 @@
 #include "assets.h"
 #include "scene.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -191,6 +192,10 @@ bool app_init(app_t *app) {
     app->bg_color[0] = 0.02f;
     app->bg_color[1] = 0.02f;
     app->bg_color[2] = 0.05f;
+    app->light_yaw        = 49.0f;  /* reproduces the former hardcoded direction */
+    app->light_pitch      = 58.0f;
+    app->light_intensity  = 1.0f;
+    app->ambient_intensity = 1.0f;
 
     build_scene(app); /* may set an initial selection */
 
@@ -228,6 +233,16 @@ static void render_scene(app_t *app) {
 
     render_set_camera(camera_view(&app->camera),
                       camera_proj(&app->camera, aspect));
+
+    float ly = kln_radians(app->light_yaw);
+    float lp = kln_radians(app->light_pitch);
+    float cp = cosf(lp);
+    vec3_t light_dir = {cp * sinf(ly), sinf(lp), cp * cosf(ly)};
+    float ki = app->light_intensity;
+    float ai = app->ambient_intensity;
+    render_set_light(light_dir,
+                     (vec3_t){ki, ki, ki},
+                     (vec3_t){0.16f * ai, 0.18f * ai, 0.24f * ai});
 
     uint32_t drawn = 0;
     query_iter_t it = renderable_query(app);
@@ -578,6 +593,12 @@ static void build_ui(app_t *app) {
         app->camera.distance = 16.0f;
         app->camera.pitch = kln_radians(18.0f);
     }
+
+    /* --- lighting --- */
+    ui_slider_float(&app->ui, "SUN YAW",   &app->light_yaw,         0.0f, 360.0f);
+    ui_slider_float(&app->ui, "SUN PITCH", &app->light_pitch,        0.0f,  90.0f);
+    ui_slider_float(&app->ui, "LIGHT",     &app->light_intensity,    0.0f,   2.0f);
+    ui_slider_float(&app->ui, "AMBIENT",   &app->ambient_intensity,  0.0f,   2.0f);
 
     /* --- crude level editor: add / select / remove --- */
     if (app->selected != ECS_ENTITY_NULL &&

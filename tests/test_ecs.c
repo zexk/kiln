@@ -107,6 +107,21 @@ Test(ecs, entity_recycling_bumps_generation) {
     world_destroy(world);
 }
 
+Test(ecs, first_entity_is_not_null_handle) {
+    world_t *world = world_create();
+
+    /* The first entity occupies index 0; its handle must still differ from
+       ECS_ENTITY_NULL (0), and the null handle must never read as alive — both
+       rely on generations starting at 1. */
+    entity_t e = entity_create(world);
+    cr_assert(ne(u64, e, ECS_ENTITY_NULL));
+    cr_assert(eq(u32, ECS_ENTITY_INDEX(e), 0));
+    cr_assert(not(entity_is_alive(world, ECS_ENTITY_NULL)));
+    cr_assert(entity_is_alive(world, e));
+
+    world_destroy(world);
+}
+
 Test(ecs, query_iteration) {
     world_t *world = world_create();
     component_id_t pos_id = component_register(world, "position", sizeof(position_t), __alignof__(position_t));

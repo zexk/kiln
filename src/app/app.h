@@ -23,6 +23,19 @@ typedef struct {
     material_handle_t material;
 } renderable_t;
 
+/* A spawnable template: a loaded mesh + material plus the uniform scale and
+   local centre that normalize it to a viewable size. The editor instantiates
+   entities from these. */
+typedef struct {
+    const char *name;
+    mesh_handle_t mesh;
+    material_handle_t material;
+    float scale;
+    vec3_t center;
+} prototype_t;
+
+#define APP_MAX_PROTOTYPES 16
+
 /* Owns the engine subsystems for one running instance. Fields accrete
  * here as subsystems come online, keeping main.c a thin entry point. */
 typedef struct {
@@ -36,6 +49,13 @@ typedef struct {
     bool ui_capture; /* UI owned the mouse last frame; gates camera input */
     float mouse_x, mouse_y;
     bool mouse_left;
+
+    /* crude editor: spawnable templates + the currently selected instance */
+    prototype_t prototypes[APP_MAX_PROTOTYPES];
+    int prototype_count;
+    int sel_prototype;             /* which template ADD spawns */
+    entity_t selected;             /* ECS_ENTITY_NULL if nothing selected */
+    material_handle_t highlight_material;
 
     /* diagnostics + things the UI tampers with */
     float fps;

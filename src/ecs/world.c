@@ -114,7 +114,10 @@ static void world_ensure_entity_capacity(world_t *world, uint32_t index) {
 
     for (uint32_t i = world->entity_capacity; i < new_capacity; i++) {
         world->locations[i] = (entity_loc_t){ 0 };
-        world->generations[i] = 0;
+        /* Start at 1 so entity {index 0, gen 0} — i.e. the value 0 — is never a
+           live handle. That keeps ECS_ENTITY_NULL a safe sentinel for both
+           entity_is_alive and the swap-remove "nothing moved" check. */
+        world->generations[i] = 1;
     }
 
     world->entity_capacity = new_capacity;

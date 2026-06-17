@@ -16,57 +16,6 @@
 
 #define MODEL_PATH(name) KILN_ASSET_DIR "/models/" name
 
-/* Spawn an entity for an already-uploaded mesh, sized and centred so its
-   longest axis spans ~2 units and it sits at slot_x on the X axis — lets test
-   models of wildly different native scales line up comparably. */
-static void place_mesh(app_t *app, mesh_handle_t mesh, material_handle_t mat,
-                       vec3_t bmin, vec3_t bmax, float slot_x) {
-    if (mesh == RENDER_MESH_INVALID || mat == RENDER_MATERIAL_INVALID) {
-        return;
-    }
-    vec3_t center = vec3_scale(vec3_add(bmin, bmax), 0.5f);
-    vec3_t extent = vec3_sub(bmax, bmin);
-    float max_dim = extent.x;
-    if (extent.y > max_dim) {
-        max_dim = extent.y;
-    }
-    if (extent.z > max_dim) {
-        max_dim = extent.z;
-    }
-    float s = (max_dim > 1e-6f) ? 2.0f / max_dim : 1.0f;
-
-    entity_t e = entity_create(app->world);
-    transform_t *t = entity_add_component(app->world, e, app->transform_id);
-    t->rotation = quat_identity();
-    t->scale = (vec3_t){s, s, s};
-    /* position = slot - s*center, so scale*v + position recentres the model. */
-    t->position =
-        (vec3_t){slot_x - s * center.x, -s * center.y, -s * center.z};
-
-    renderable_t *r = entity_add_component(app->world, e, app->renderable_id);
-    r->mesh = mesh;
-    r->material = mat;
-}
-
-static void place_cpu_mesh(app_t *app, cpu_mesh_t *m, material_handle_t mat,
-                           float slot_x) {
-    vec3_t bmin, bmax;
-    if (!cpu_mesh_bounds(m, &bmin, &bmax)) {
-        return;
-    }
-    place_mesh(app, render_upload_mesh(m), mat, bmin, bmax, slot_x);
-}
-
-static void load_model(app_t *app, const char *path, material_handle_t mat,
-                       float slot_x) {
-    cpu_mesh_t m;
-    if (!obj_load(path, &m)) {
-        return;
-    }
-    place_cpu_mesh(app, &m, mat, slot_x);
-    cpu_mesh_free(&m);
-}
-
 static material_handle_t solid(float r, float g, float b) {
     return render_create_material((vec4_t){r, g, b, 1.0f},
                                   RENDER_TEXTURE_INVALID);
@@ -86,43 +35,91 @@ static material_handle_t textured(const char *path) {
     return render_create_material((vec4_t){1.0f, 1.0f, 1.0f, 1.0f}, tex);
 }
 
-/* The scene: a procedural cube plus the OBJ test subjects in a row, each with
-   its own flat-colour material. Requires the renderer to be up (meshes and
-   materials are created immediately). */
+/* Register a spawnable prototype from a CPU mesh: upload it, record the
+   normalize-to-~2-units scale and local centre. Returns its index or -1. */
+static int add_prototype(app_t *app, const char *name, cpu_mesh_t *m,
+                         material_handle_t mat) {
+    vec3_t bmin, bmax;
+    mesh_handle_t mesh = render_upload_mesh(m);
+    if (app->prototype_count >= APP_MAX_PROTOTYPES ||
+        mesh == RENDER_MESH_INVALID || mat == RENDER_MATERIAL_INVALID ||
+        !cpu_mesh_bounds(m, &bmin, &bmax)) {
+        return -1;
+    }
+    vec3_t extent = vec3_sub(bmax, bmin);
+    float max_dim = extent.x;
+    if (extent.y > max_dim) {
+        max_dim = extent.y;
+    }
+    if (extent.z > max_dim) {
+        max_dim = extent.z;
+    }
+
+    prototype_t *p = &app->prototypes[app->prototype_count];
+    p->name = name;
+    p->mesh = mesh;
+    p->material = mat;
+    p->scale = (max_dim > 1e-6f) ? 2.0f / max_dim : 1.0f;
+    p->center = vec3_scale(vec3_add(bmin, bmax), 0.5f);
+    return app->prototype_count++;
+}
+
+static int load_prototype(app_t *app, const char *name, const char *path,
+                          material_handle_t mat) {
+    cpu_mesh_t m;
+    if (!obj_load(path, &m)) {
+        return -1;
+    }
+    int idx = add_prototype(app, name, &m, mat);
+    cpu_mesh_free(&m);
+    return idx;
+}
+
+/* Instantiate a prototype as an entity, centred on `at`. Returns the entity. */
+static entity_t spawn(app_t *app, int proto, vec3_t at) {
+    if (proto < 0 || proto >= app->prototype_count) {
+        return ECS_ENTITY_NULL;
+    }
+    prototype_t *p = &app->prototypes[proto];
+    entity_t e = entity_create(app->world);
+    transform_t *t = entity_add_component(app->world, e, app->transform_id);
+    t->rotation = quat_identity();
+    t->scale = (vec3_t){p->scale, p->scale, p->scale};
+    /* position = at - scale*center, so the model's centre lands on `at`. */
+    t->position = vec3_sub(at, vec3_scale(p->center, p->scale));
+
+    renderable_t *r = entity_add_component(app->world, e, app->renderable_id);
+    r->mesh = p->mesh;
+    r->material = p->material;
+    return e;
+}
+
+/* Register the prototypes and lay one of each out in a starting row. */
 static void build_scene(app_t *app) {
-    /* spot ships with a texture; the rest are flat-coloured. Fall back to a
-       solid colour if the image can't be loaded. */
     material_handle_t spot_mat = textured(MODEL_PATH("spot.png"));
     if (spot_mat == RENDER_MATERIAL_INVALID) {
         spot_mat = solid(0.90f, 0.85f, 0.80f);
     }
+    app->highlight_material = solid(1.0f, 0.80f, 0.15f);
 
-    struct {
-        const char *path; /* NULL = procedural cube */
-        material_handle_t mat;
-    } items[] = {
-        {NULL, solid(0.85f, 0.55f, 0.25f)},
-        {MODEL_PATH("cow.obj"), solid(0.80f, 0.30f, 0.30f)},
-        {MODEL_PATH("spot.obj"), spot_mat},
-        {MODEL_PATH("fandisk.obj"), solid(0.45f, 0.65f, 0.85f)},
-        {MODEL_PATH("cheburashka.obj"), solid(0.55f, 0.45f, 0.70f)},
-        {MODEL_PATH("armadillo.obj"), solid(0.55f, 0.75f, 0.45f)},
-    };
-    const int count = (int)(sizeof(items) / sizeof(items[0]));
+    cpu_mesh_t cube;
+    if (cpu_mesh_cube(&cube)) {
+        add_prototype(app, "CUBE", &cube, solid(0.85f, 0.55f, 0.25f));
+        cpu_mesh_free(&cube);
+    }
+    load_prototype(app, "COW", MODEL_PATH("cow.obj"), solid(0.80f, 0.30f, 0.30f));
+    load_prototype(app, "SPOT", MODEL_PATH("spot.obj"), spot_mat);
+    load_prototype(app, "FANDISK", MODEL_PATH("fandisk.obj"),
+                   solid(0.45f, 0.65f, 0.85f));
+    load_prototype(app, "CHEBURASHKA", MODEL_PATH("cheburashka.obj"),
+                   solid(0.55f, 0.45f, 0.70f));
+    load_prototype(app, "ARMADILLO", MODEL_PATH("armadillo.obj"),
+                   solid(0.55f, 0.75f, 0.45f));
+
     const float spacing = 2.8f;
-    float x0 = -spacing * (float)(count - 1) * 0.5f;
-
-    for (int i = 0; i < count; i++) {
-        float x = x0 + spacing * (float)i;
-        if (items[i].path) {
-            load_model(app, items[i].path, items[i].mat, x);
-        } else {
-            cpu_mesh_t cube;
-            if (cpu_mesh_cube(&cube)) {
-                place_cpu_mesh(app, &cube, items[i].mat, x);
-                cpu_mesh_free(&cube);
-            }
-        }
+    float x0 = -spacing * (float)(app->prototype_count - 1) * 0.5f;
+    for (int i = 0; i < app->prototype_count; i++) {
+        spawn(app, i, (vec3_t){x0 + spacing * (float)i, 0.0f, 0.0f});
     }
 }
 
@@ -153,6 +150,8 @@ bool app_init(app_t *app) {
     app->camera.pitch = kln_radians(18.0f);
 
     ui_init(&app->ui);
+    app->selected = ECS_ENTITY_NULL;
+    app->sel_prototype = 0;
     app->spin_speed = 0.6f;
     app->bg_color[0] = 0.02f;
     app->bg_color[1] = 0.02f;
@@ -194,11 +193,42 @@ static void render_scene(app_t *app) {
     while (query_next(&it)) {
         transform_t *t = query_get(&it, app->transform_id);
         renderable_t *r = query_get(&it, app->renderable_id);
-        render_mesh(r->mesh, r->material,
+        material_handle_t mat = (query_entity(&it) == app->selected)
+                                    ? app->highlight_material
+                                    : r->material;
+        render_mesh(r->mesh, mat,
                     mat4_from_trs(t->position, t->rotation, t->scale));
         drawn++;
     }
     app->draw_count = drawn;
+}
+
+/* Snapshot the live renderable entities into `out` (so the world isn't mutated
+   mid-iteration when the UI then adds/removes). Returns the count. */
+static int collect_entities(app_t *app, entity_t *out, int max) {
+    int n = 0;
+    query_iter_t it = renderable_query(app);
+    while (query_next(&it) && n < max) {
+        out[n++] = query_entity(&it);
+    }
+    return n;
+}
+
+static const char *selected_name(app_t *app) {
+    if (app->selected == ECS_ENTITY_NULL ||
+        !entity_is_alive(app->world, app->selected)) {
+        return "NONE";
+    }
+    renderable_t *r =
+        entity_get_component(app->world, app->selected, app->renderable_id);
+    if (r) {
+        for (int i = 0; i < app->prototype_count; i++) {
+            if (app->prototypes[i].mesh == r->mesh) {
+                return app->prototypes[i].name;
+            }
+        }
+    }
+    return "?";
 }
 
 /* Build the diagnostics / tamper panel and record whether it owns the mouse. */
@@ -237,6 +267,45 @@ static void build_ui(app_t *app) {
         camera_init(&app->camera);
         app->camera.distance = 16.0f;
         app->camera.pitch = kln_radians(18.0f);
+    }
+
+    /* --- crude level editor: add / select / remove --- */
+    if (app->selected != ECS_ENTITY_NULL &&
+        !entity_is_alive(app->world, app->selected)) {
+        app->selected = ECS_ENTITY_NULL;
+    }
+    entity_t ents[256];
+    int ecount = collect_entities(app, ents, 256);
+
+    ui_text(&app->ui, "ENTITIES %d", ecount);
+    if (app->prototype_count > 0) {
+        ui_text(&app->ui, "SPAWN: %s",
+                app->prototypes[app->sel_prototype].name);
+        if (ui_button(&app->ui, "CYCLE MESH")) {
+            app->sel_prototype =
+                (app->sel_prototype + 1) % app->prototype_count;
+        }
+        /* Spawn at the orbit target — pan the camera to place where it lands. */
+        if (ui_button(&app->ui, "ADD AT TARGET")) {
+            app->selected = spawn(app, app->sel_prototype, app->camera.target);
+        }
+    }
+
+    ui_text(&app->ui, "SEL: %s", selected_name(app));
+    if (ui_button(&app->ui, "SELECT NEXT") && ecount > 0) {
+        int cur = -1;
+        for (int i = 0; i < ecount; i++) {
+            if (ents[i] == app->selected) {
+                cur = i;
+                break;
+            }
+        }
+        app->selected = ents[(cur + 1) % ecount];
+    }
+    if (ui_button(&app->ui, "REMOVE") &&
+        app->selected != ECS_ENTITY_NULL) {
+        entity_destroy(app->world, app->selected);
+        app->selected = ECS_ENTITY_NULL;
     }
 
     ui_panel_end(&app->ui);

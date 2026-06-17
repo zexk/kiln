@@ -14,8 +14,6 @@ layout(location = 1) out vec2 frag_uv;
 
 void main() {
     gl_Position = pc.mvp * vec4(in_position, 1.0);
-    /* World-space normal. Assumes uniform scale (true for our normalized test
-       models); a proper inverse-transpose comes with non-uniform scaling. */
-    frag_normal = mat3(pc.model) * in_normal;
+    frag_normal = transpose(inverse(mat3(pc.model))) * in_normal;
     frag_uv = in_uv;
 }

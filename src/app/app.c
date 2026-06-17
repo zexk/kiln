@@ -10,6 +10,7 @@
 #include "render.h"
 #include "ui.h"
 #include "assets.h"
+#include "scene.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -458,6 +459,88 @@ static void run_pick_selftest(app_t *app) {
            total, corner_miss ? "OK" : "FAIL");
 }
 
+static const char *SCENE_PATH = "scene.kln";
+
+/* Serialize every renderable entity to a scene file. */
+static void scene_do_save(app_t *app) {
+    scene_entity_t buf[256];
+    int count = 0;
+
+    query_iter_t it = renderable_query(app);
+    while (query_next(&it) && count < (int)(sizeof(buf) / sizeof(buf[0]))) {
+        transform_t *t = query_get(&it, app->transform_id);
+        renderable_t *r = query_get(&it, app->renderable_id);
+        prototype_t *p = prototype_for_mesh(app, r->mesh);
+        if (!p) {
+            continue;
+        }
+        scene_entity_t *e = &buf[count++];
+        strncpy(e->name, p->name, SCENE_NAME_MAX - 1);
+        e->name[SCENE_NAME_MAX - 1] = '\0';
+        e->position = t->position;
+        e->rotation = t->rotation;
+        e->scale = t->scale;
+    }
+
+    if (scene_save(SCENE_PATH, buf, count)) {
+        snprintf(app->scene_status, sizeof(app->scene_status),
+                 "SAVED %d ENTITIES", count);
+    } else {
+        snprintf(app->scene_status, sizeof(app->scene_status), "SAVE FAILED");
+    }
+}
+
+/* Replace the live scene with the contents of the scene file. */
+static void scene_do_load(app_t *app) {
+    scene_entity_t buf[256];
+    int count = scene_load(SCENE_PATH, buf, (int)(sizeof(buf) / sizeof(buf[0])));
+    if (count < 0) {
+        snprintf(app->scene_status, sizeof(app->scene_status), "LOAD FAILED");
+        return;
+    }
+
+    /* Destroy all live entities first. */
+    entity_t ents[256];
+    int ecount = collect_entities(app, ents, (int)(sizeof(ents) / sizeof(ents[0])));
+    for (int i = 0; i < ecount; i++) {
+        entity_destroy(app->world, ents[i]);
+    }
+    app->selected = ECS_ENTITY_NULL;
+
+    /* Spawn from file, overriding the default transform with the saved one. */
+    int spawned = 0;
+    for (int i = 0; i < count; i++) {
+        int proto = -1;
+        for (int j = 0; j < app->prototype_count; j++) {
+            if (strcmp(app->prototypes[j].name, buf[i].name) == 0) {
+                proto = j;
+                break;
+            }
+        }
+        if (proto < 0) {
+            fprintf(stderr, "[scene] unknown prototype '%s', skipping\n",
+                    buf[i].name);
+            continue;
+        }
+
+        entity_t e = spawn(app, proto, (vec3_t){0.0f, 0.0f, 0.0f});
+        if (e == ECS_ENTITY_NULL) {
+            continue;
+        }
+        transform_t *t =
+            entity_get_component(app->world, e, app->transform_id);
+        if (t) {
+            t->position = buf[i].position;
+            t->rotation = buf[i].rotation;
+            t->scale    = buf[i].scale;
+        }
+        spawned++;
+    }
+
+    snprintf(app->scene_status, sizeof(app->scene_status), "LOADED %d ENTITIES",
+             spawned);
+}
+
 /* Build the diagnostics / tamper panel and record whether it owns the mouse. */
 static void build_ui(app_t *app) {
     uint32_t w, h;
@@ -541,6 +624,17 @@ static void build_ui(app_t *app) {
         app->selected != ECS_ENTITY_NULL) {
         entity_destroy(app->world, app->selected);
         app->selected = ECS_ENTITY_NULL;
+    }
+
+    /* --- scene persistence --- */
+    if (ui_button(&app->ui, "SAVE SCENE")) {
+        scene_do_save(app);
+    }
+    if (ui_button(&app->ui, "LOAD SCENE")) {
+        scene_do_load(app);
+    }
+    if (app->scene_status[0]) {
+        ui_text(&app->ui, "%s", app->scene_status);
     }
 
     ui_panel_end(&app->ui);

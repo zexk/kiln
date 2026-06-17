@@ -83,6 +83,9 @@ typedef struct {
     bool auto_rotate;
     float spin_speed;
     float bg_color[3];
+
+    /* scene persistence: brief status line shown in the panel */
+    char scene_status[64];
 } app_t;
 
 bool app_init(app_t *app);

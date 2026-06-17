@@ -9,9 +9,12 @@
 
 #include <stdio.h>
 
+void image_init(void) {
+    stbi_set_flip_vertically_on_load(1);
+}
+
 bool image_load(const char *path, uint8_t **out_pixels, int *out_w,
                 int *out_h) {
-    stbi_set_flip_vertically_on_load(1);
     int channels;
     stbi_uc *pixels = stbi_load(path, out_w, out_h, &channels, 4 /* RGBA */);
     if (!pixels) {

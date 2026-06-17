@@ -131,6 +131,19 @@ Test(math, slerp_hits_endpoints) {
                           quat_rotate_vec3(b, v)));
 }
 
+/* --- vec3_reflect --- */
+
+Test(math, vec3_reflect_across_unit_normal) {
+    /* Ray going down-and-right reflected off an upward-facing plane. */
+    vec3_t incoming = {1.0f, -1.0f, 0.0f};
+    vec3_t normal   = {0.0f,  1.0f, 0.0f};
+    cr_assert(vec3_approx(vec3_reflect(incoming, normal), (vec3_t){1.0f, 1.0f, 0.0f}));
+
+    /* Reflect a vector parallel to the normal: should negate. */
+    vec3_t down = {0.0f, -1.0f, 0.0f};
+    cr_assert(vec3_approx(vec3_reflect(down, normal), (vec3_t){0.0f, 1.0f, 0.0f}));
+}
+
 /* --- mat4_from_trs: verify the optimised fast path against naive T*R*S --- */
 
 static bool mat4_approx(mat4_t a, mat4_t b) {

@@ -75,6 +75,8 @@ float vec3_length_sq(vec3_t a);
 vec3_t vec3_normalize(vec3_t a);
 vec3_t vec3_lerp(vec3_t a, vec3_t b, float t);
 float vec3_distance(vec3_t a, vec3_t b);
+/* Reflect v across the plane whose unit normal is n: v - 2*dot(v,n)*n. */
+vec3_t vec3_reflect(vec3_t v, vec3_t n);
 
 /* --- vec4 --- */
 

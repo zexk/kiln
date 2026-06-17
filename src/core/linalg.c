@@ -112,6 +112,10 @@ float vec3_distance(vec3_t a, vec3_t b) {
     return vec3_length(vec3_sub(a, b));
 }
 
+vec3_t vec3_reflect(vec3_t v, vec3_t n) {
+    return vec3_sub(v, vec3_scale(n, 2.0f * vec3_dot(v, n)));
+}
+
 /* --- vec4 --- */
 
 vec4_t vec4_add(vec4_t a, vec4_t b) {

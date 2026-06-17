@@ -13,4 +13,9 @@ for m in cow spot fandisk cheburashka armadillo; do
     echo "fetching $m.obj"
     curl -fsSL -o "$dir/$m.obj" "$base/$m.obj"
 done
+
+# spot ships with an albedo texture used by the material demo.
+echo "fetching spot.png"
+curl -fsSL -o "$dir/spot.png" "$base/spot.png"
+
 echo "done -> $dir"

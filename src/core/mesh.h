@@ -10,6 +10,7 @@
 typedef struct {
     vec3_t position;
     vec3_t normal;
+    vec2_t uv;
 } mesh_vertex_t;
 
 /* A CPU-side indexed triangle mesh. Heap-owned; release with cpu_mesh_free.

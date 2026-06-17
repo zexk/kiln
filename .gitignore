@@ -10,5 +10,6 @@ result-*
 *.swp
 .DS_Store
 
-# Downloaded test meshes (fetch with assets/models/fetch.sh)
+# Downloaded test meshes / textures (fetch with assets/models/fetch.sh)
 assets/models/*.obj
+assets/models/*.png

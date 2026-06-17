@@ -16,8 +16,10 @@
 /* Debug-text vertex budget per frame (each lit font pixel costs 6 verts). */
 #define MAX_TEXT_VERTS (64 * 1024)
 
-/* Resident GPU meshes and per-frame draw instances. */
+/* Resident GPU resources and per-frame draw instances. */
 #define MAX_MESHES 256
+#define MAX_TEXTURES 256
+#define MAX_MATERIALS 256
 #define MAX_INSTANCES 4096
 
 #define VK_CHECK(x)                                                         \
@@ -44,9 +46,30 @@ typedef struct {
     uint32_t index_count;
 } gpu_mesh_t;
 
-/* One queued draw: which mesh, plus the matrices the shader needs. */
+/* A sampled 2D image. */
+typedef struct {
+    VkImage image;
+    VkDeviceMemory memory;
+    VkImageView view;
+} gpu_texture_t;
+
+/* A material: a small UBO (base colour) plus a descriptor set binding that UBO
+   and an albedo texture for the fragment shader. */
+typedef struct {
+    VkBuffer ubo;
+    VkDeviceMemory ubo_memory;
+    VkDescriptorSet set;
+} gpu_material_t;
+
+/* Layout of the per-material uniform buffer; matches Material in mesh.frag. */
+typedef struct {
+    float base_color[4];
+} material_ubo_t;
+
+/* One queued draw: which mesh + material, plus the matrices the shader needs. */
 typedef struct {
     mesh_handle_t mesh;
+    material_handle_t material;
     mat4_t mvp;   /* proj * view * model, for clip-space position */
     mat4_t model; /* for transforming the normal into world space */
 } mesh_instance_t;
@@ -95,6 +118,16 @@ static struct {
 
     gpu_mesh_t meshes[MAX_MESHES];
     uint32_t mesh_count;
+
+    gpu_texture_t textures[MAX_TEXTURES];
+    uint32_t texture_count;
+    texture_handle_t default_texture; /* 1x1 white, for untextured materials */
+    VkSampler sampler;
+
+    VkDescriptorSetLayout material_set_layout;
+    VkDescriptorPool descriptor_pool;
+    gpu_material_t materials[MAX_MATERIALS];
+    uint32_t material_count;
 
     /* Mesh draws queued this frame; drained in record_command_buffer. */
     mat4_t view;
@@ -186,6 +219,36 @@ static bool create_filled_buffer(const void *data, VkDeviceSize size,
     memcpy(mapped, data, (size_t)size);
     vkUnmapMemory(g.device, *memory);
     return true;
+}
+
+/* Allocate and begin a throwaway command buffer for an init-time transfer.
+   Pair with end_single_time, which submits and blocks until it completes. */
+static VkCommandBuffer begin_single_time(void) {
+    VkCommandBufferAllocateInfo alloc = {0};
+    alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool = g.command_pool;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    if (vkAllocateCommandBuffers(g.device, &alloc, &cmd) != VK_SUCCESS) {
+        return VK_NULL_HANDLE;
+    }
+    VkCommandBufferBeginInfo begin = {0};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+    return cmd;
+}
+
+static void end_single_time(VkCommandBuffer cmd) {
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit = {0};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(g.graphics_queue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(g.graphics_queue);
+    vkFreeCommandBuffers(g.device, g.command_pool, 1, &cmd);
 }
 
 static bool read_file(const char *path, uint32_t **out_data, size_t *out_size) {
@@ -566,6 +629,57 @@ static bool create_depth_resources(void) {
 }
 
 /* ----------------------------------------------------------------------- */
+/* materials: descriptor layout, pool, sampler                              */
+/* ----------------------------------------------------------------------- */
+
+/* Each material owns a descriptor set with this layout: binding 0 a uniform
+   buffer (base colour), binding 1 a combined image sampler (albedo). Created
+   before the pipeline, which references the set layout. */
+static bool create_material_infra(void) {
+    VkDescriptorSetLayoutBinding bindings[2] = {0};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layout = {0};
+    layout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout.bindingCount = 2;
+    layout.pBindings = bindings;
+    VK_CHECK(vkCreateDescriptorSetLayout(g.device, &layout, NULL,
+                                         &g.material_set_layout));
+
+    VkDescriptorPoolSize sizes[2] = {0};
+    sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    sizes[0].descriptorCount = MAX_MATERIALS;
+    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    sizes[1].descriptorCount = MAX_MATERIALS;
+
+    VkDescriptorPoolCreateInfo pool = {0};
+    pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool.maxSets = MAX_MATERIALS;
+    pool.poolSizeCount = 2;
+    pool.pPoolSizes = sizes;
+    VK_CHECK(vkCreateDescriptorPool(g.device, &pool, NULL, &g.descriptor_pool));
+
+    VkSamplerCreateInfo sampler = {0};
+    sampler.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler.magFilter = VK_FILTER_LINEAR;
+    sampler.minFilter = VK_FILTER_LINEAR;
+    sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.anisotropyEnable = VK_FALSE; /* device feature not requested */
+    sampler.maxLod = 0.0f;               /* no mips yet */
+    VK_CHECK(vkCreateSampler(g.device, &sampler, NULL, &g.sampler));
+    return true;
+}
+
+/* ----------------------------------------------------------------------- */
 /* pipeline                                                                  */
 /* ----------------------------------------------------------------------- */
 
@@ -591,7 +705,7 @@ static bool create_pipeline(void) {
     binding.stride = sizeof(mesh_vertex_t);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    VkVertexInputAttributeDescription attrs[2] = {0};
+    VkVertexInputAttributeDescription attrs[3] = {0};
     attrs[0].location = 0;
     attrs[0].binding = 0;
     attrs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
@@ -600,13 +714,17 @@ static bool create_pipeline(void) {
     attrs[1].binding = 0;
     attrs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
     attrs[1].offset = offsetof(mesh_vertex_t, normal);
+    attrs[2].location = 2;
+    attrs[2].binding = 0;
+    attrs[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attrs[2].offset = offsetof(mesh_vertex_t, uv);
 
     VkPipelineVertexInputStateCreateInfo vertex_input = {0};
     vertex_input.sType =
         VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertex_input.vertexBindingDescriptionCount = 1;
     vertex_input.pVertexBindingDescriptions = &binding;
-    vertex_input.vertexAttributeDescriptionCount = 2;
+    vertex_input.vertexAttributeDescriptionCount = 3;
     vertex_input.pVertexAttributeDescriptions = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo input_assembly = {0};
@@ -664,6 +782,8 @@ static bool create_pipeline(void) {
 
     VkPipelineLayoutCreateInfo layout = {0};
     layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout.setLayoutCount = 1;
+    layout.pSetLayouts = &g.material_set_layout;
     layout.pushConstantRangeCount = 1;
     layout.pPushConstantRanges = &push;
     VK_CHECK(
@@ -981,12 +1101,14 @@ void render_set_camera(mat4_t view, mat4_t proj) {
     g.proj = proj;
 }
 
-void render_mesh(mesh_handle_t mesh, mat4_t model) {
-    if (g.instance_count >= MAX_INSTANCES || mesh >= g.mesh_count) {
+void render_mesh(mesh_handle_t mesh, material_handle_t material, mat4_t model) {
+    if (g.instance_count >= MAX_INSTANCES || mesh >= g.mesh_count ||
+        material >= g.material_count) {
         return;
     }
     mesh_instance_t *inst = &g.instances[g.instance_count++];
     inst->mesh = mesh;
+    inst->material = material;
     inst->mvp = mat4_mul(g.proj, mat4_mul(g.view, model));
     inst->model = model;
 }
@@ -1109,6 +1231,10 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
         const mesh_instance_t *inst = &g.instances[i];
         const gpu_mesh_t *mesh = &g.meshes[inst->mesh];
 
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                g.pipeline_layout, 0, 1,
+                                &g.materials[inst->material].set, 0, NULL);
+
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertex_buffer, &offset);
         vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
@@ -1167,8 +1293,8 @@ bool render_init(window_t *window) {
 
     if (!create_instance() || !create_surface() || !pick_physical_device() ||
         !create_device() || !create_swapchain() || !create_depth_resources() ||
-        !create_pipeline() || !create_text_pipeline() ||
-        !create_commands_and_sync()) {
+        !create_material_infra() || !create_pipeline() ||
+        !create_text_pipeline() || !create_commands_and_sync()) {
         return false;
     }
 
@@ -1178,6 +1304,15 @@ bool render_init(window_t *window) {
 
     g.instances = malloc(sizeof(mesh_instance_t) * MAX_INSTANCES);
     if (!g.instances) {
+        return false;
+    }
+
+    /* Built-in 1x1 white texture, substituted for untextured materials so the
+       shader always has something to sample. Needs the command pool, hence
+       after create_commands_and_sync. */
+    const uint8_t white[4] = {255, 255, 255, 255};
+    g.default_texture = render_upload_texture(white, 1, 1);
+    if (g.default_texture == RENDER_TEXTURE_INVALID) {
         return false;
     }
     return true;
@@ -1205,6 +1340,172 @@ mesh_handle_t render_upload_mesh(const cpu_mesh_t *mesh) {
 
     g.meshes[g.mesh_count] = gm;
     return g.mesh_count++;
+}
+
+texture_handle_t render_upload_texture(const uint8_t *rgba, uint32_t w,
+                                       uint32_t h) {
+    if (g.texture_count >= MAX_TEXTURES || w == 0 || h == 0) {
+        return RENDER_TEXTURE_INVALID;
+    }
+
+    VkDeviceSize size = (VkDeviceSize)w * h * 4;
+    VkBuffer staging;
+    VkDeviceMemory staging_mem;
+    if (!create_filled_buffer(rgba, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                              &staging, &staging_mem)) {
+        return RENDER_TEXTURE_INVALID;
+    }
+
+    gpu_texture_t t = {0};
+    VkImageCreateInfo image = {0};
+    image.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image.imageType = VK_IMAGE_TYPE_2D;
+    image.format = VK_FORMAT_R8G8B8A8_SRGB;
+    image.extent.width = w;
+    image.extent.height = h;
+    image.extent.depth = 1;
+    image.mipLevels = 1;
+    image.arrayLayers = 1;
+    image.samples = VK_SAMPLE_COUNT_1_BIT;
+    image.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image.usage =
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    texture_handle_t result = RENDER_TEXTURE_INVALID;
+    if (vkCreateImage(g.device, &image, NULL, &t.image) == VK_SUCCESS) {
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(g.device, t.image, &req);
+        uint32_t type_index;
+        if (find_memory_type(req.memoryTypeBits,
+                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                             &type_index)) {
+            VkMemoryAllocateInfo alloc = {0};
+            alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            alloc.allocationSize = req.size;
+            alloc.memoryTypeIndex = type_index;
+            if (vkAllocateMemory(g.device, &alloc, NULL, &t.memory) ==
+                    VK_SUCCESS &&
+                vkBindImageMemory(g.device, t.image, t.memory, 0) ==
+                    VK_SUCCESS) {
+
+                VkCommandBuffer cmd = begin_single_time();
+                image_barrier(cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                              VK_IMAGE_LAYOUT_UNDEFINED,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                              VK_ACCESS_TRANSFER_WRITE_BIT,
+                              VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                              VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+                VkBufferImageCopy region = {0};
+                region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                region.imageSubresource.layerCount = 1;
+                region.imageExtent.width = w;
+                region.imageExtent.height = h;
+                region.imageExtent.depth = 1;
+                vkCmdCopyBufferToImage(cmd, staging, t.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                                       &region);
+
+                image_barrier(cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              VK_ACCESS_TRANSFER_WRITE_BIT,
+                              VK_ACCESS_SHADER_READ_BIT,
+                              VK_PIPELINE_STAGE_TRANSFER_BIT,
+                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                end_single_time(cmd);
+
+                VkImageViewCreateInfo view = {0};
+                view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                view.image = t.image;
+                view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                view.format = VK_FORMAT_R8G8B8A8_SRGB;
+                view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                view.subresourceRange.levelCount = 1;
+                view.subresourceRange.layerCount = 1;
+                if (vkCreateImageView(g.device, &view, NULL, &t.view) ==
+                    VK_SUCCESS) {
+                    g.textures[g.texture_count] = t;
+                    result = g.texture_count++;
+                }
+            }
+        }
+    }
+
+    vkDestroyBuffer(g.device, staging, NULL);
+    vkFreeMemory(g.device, staging_mem, NULL);
+
+    if (result == RENDER_TEXTURE_INVALID) {
+        if (t.view) {
+            vkDestroyImageView(g.device, t.view, NULL);
+        }
+        if (t.image) {
+            vkDestroyImage(g.device, t.image, NULL);
+        }
+        if (t.memory) {
+            vkFreeMemory(g.device, t.memory, NULL);
+        }
+        fprintf(stderr, "[render] texture upload failed\n");
+    }
+    return result;
+}
+
+material_handle_t render_create_material(vec4_t base_color,
+                                         texture_handle_t texture) {
+    if (g.material_count >= MAX_MATERIALS) {
+        return RENDER_MATERIAL_INVALID;
+    }
+    if (texture >= g.texture_count) {
+        texture = g.default_texture; /* flat colour: sample white */
+    }
+
+    gpu_material_t m = {0};
+    material_ubo_t data = {{base_color.x, base_color.y, base_color.z,
+                            base_color.w}};
+    if (!create_filled_buffer(&data, sizeof(data),
+                              VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, &m.ubo,
+                              &m.ubo_memory)) {
+        return RENDER_MATERIAL_INVALID;
+    }
+
+    VkDescriptorSetAllocateInfo alloc = {0};
+    alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc.descriptorPool = g.descriptor_pool;
+    alloc.descriptorSetCount = 1;
+    alloc.pSetLayouts = &g.material_set_layout;
+    if (vkAllocateDescriptorSets(g.device, &alloc, &m.set) != VK_SUCCESS) {
+        vkDestroyBuffer(g.device, m.ubo, NULL);
+        vkFreeMemory(g.device, m.ubo_memory, NULL);
+        return RENDER_MATERIAL_INVALID;
+    }
+
+    VkDescriptorBufferInfo buffer_info = {0};
+    buffer_info.buffer = m.ubo;
+    buffer_info.range = sizeof(data);
+
+    VkDescriptorImageInfo image_info = {0};
+    image_info.sampler = g.sampler;
+    image_info.imageView = g.textures[texture].view;
+    image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet writes[2] = {0};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = m.set;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[0].pBufferInfo = &buffer_info;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = m.set;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].pImageInfo = &image_info;
+    vkUpdateDescriptorSets(g.device, 2, writes, 0, NULL);
+
+    g.materials[g.material_count] = m;
+    return g.material_count++;
 }
 
 void render_draw(void) {
@@ -1290,6 +1591,20 @@ void render_shutdown(void) {
         vkDestroyBuffer(g.device, g.meshes[i].vertex_buffer, NULL);
         vkFreeMemory(g.device, g.meshes[i].vertex_memory, NULL);
     }
+
+    /* Material descriptor sets are freed wholesale with the pool. */
+    for (uint32_t i = 0; i < g.material_count; i++) {
+        vkDestroyBuffer(g.device, g.materials[i].ubo, NULL);
+        vkFreeMemory(g.device, g.materials[i].ubo_memory, NULL);
+    }
+    for (uint32_t i = 0; i < g.texture_count; i++) {
+        vkDestroyImageView(g.device, g.textures[i].view, NULL);
+        vkDestroyImage(g.device, g.textures[i].image, NULL);
+        vkFreeMemory(g.device, g.textures[i].memory, NULL);
+    }
+    vkDestroySampler(g.device, g.sampler, NULL);
+    vkDestroyDescriptorPool(g.device, g.descriptor_pool, NULL);
+    vkDestroyDescriptorSetLayout(g.device, g.material_set_layout, NULL);
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroyBuffer(g.device, g.text_buffer[i], NULL);

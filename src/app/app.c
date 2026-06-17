@@ -2,6 +2,7 @@
 
 #include "camera.h"
 #include "core.h"
+#include "image.h"
 #include "linalg.h"
 #include "mesh.h"
 #include "obj.h"
@@ -16,9 +17,9 @@
 /* Spawn an entity for an already-uploaded mesh, sized and centred so its
    longest axis spans ~2 units and it sits at slot_x on the X axis — lets test
    models of wildly different native scales line up comparably. */
-static void place_mesh(app_t *app, mesh_handle_t mesh, vec3_t bmin, vec3_t bmax,
-                       float slot_x) {
-    if (mesh == RENDER_MESH_INVALID) {
+static void place_mesh(app_t *app, mesh_handle_t mesh, material_handle_t mat,
+                       vec3_t bmin, vec3_t bmax, float slot_x) {
+    if (mesh == RENDER_MESH_INVALID || mat == RENDER_MATERIAL_INVALID) {
         return;
     }
     vec3_t center = vec3_scale(vec3_add(bmin, bmax), 0.5f);
@@ -40,47 +41,86 @@ static void place_mesh(app_t *app, mesh_handle_t mesh, vec3_t bmin, vec3_t bmax,
     t->position =
         (vec3_t){slot_x - s * center.x, -s * center.y, -s * center.z};
 
-    mesh_handle_t *mh = entity_add_component(app->world, e, app->mesh_id);
-    *mh = mesh;
+    renderable_t *r = entity_add_component(app->world, e, app->renderable_id);
+    r->mesh = mesh;
+    r->material = mat;
 }
 
-static void place_cpu_mesh(app_t *app, cpu_mesh_t *m, float slot_x) {
+static void place_cpu_mesh(app_t *app, cpu_mesh_t *m, material_handle_t mat,
+                           float slot_x) {
     vec3_t bmin, bmax;
     if (!cpu_mesh_bounds(m, &bmin, &bmax)) {
         return;
     }
-    place_mesh(app, render_upload_mesh(m), bmin, bmax, slot_x);
+    place_mesh(app, render_upload_mesh(m), mat, bmin, bmax, slot_x);
 }
 
-static void load_model(app_t *app, const char *path, float slot_x) {
+static void load_model(app_t *app, const char *path, material_handle_t mat,
+                       float slot_x) {
     cpu_mesh_t m;
     if (!obj_load(path, &m)) {
         return;
     }
-    place_cpu_mesh(app, &m, slot_x);
+    place_cpu_mesh(app, &m, mat, slot_x);
     cpu_mesh_free(&m);
 }
 
-/* The scene: a procedural cube plus the OBJ test subjects, in a row. Requires
-   the renderer to be up (meshes are uploaded immediately). */
-static void build_scene(app_t *app) {
-    const char *models[] = {
-        MODEL_PATH("cow.obj"),    MODEL_PATH("spot.obj"),
-        MODEL_PATH("fandisk.obj"), MODEL_PATH("cheburashka.obj"),
-        MODEL_PATH("armadillo.obj"),
-    };
-    const int model_count = (int)(sizeof(models) / sizeof(models[0]));
-    const float spacing = 2.8f;
-    const int slots = model_count + 1; /* +1 for the procedural cube */
-    float x0 = -spacing * (float)(slots - 1) * 0.5f;
+static material_handle_t solid(float r, float g, float b) {
+    return render_create_material((vec4_t){r, g, b, 1.0f},
+                                  RENDER_TEXTURE_INVALID);
+}
 
-    cpu_mesh_t cube;
-    if (cpu_mesh_cube(&cube)) {
-        place_cpu_mesh(app, &cube, x0);
-        cpu_mesh_free(&cube);
+/* Load an image file as an albedo texture and wrap it in a white-base material
+   (so the texture shows unmodulated). Returns INVALID if the image won't load. */
+static material_handle_t textured(const char *path) {
+    uint8_t *pixels;
+    int w, h;
+    if (!image_load(path, &pixels, &w, &h)) {
+        return RENDER_MATERIAL_INVALID;
     }
-    for (int i = 0; i < model_count; i++) {
-        load_model(app, models[i], x0 + spacing * (float)(i + 1));
+    texture_handle_t tex =
+        render_upload_texture(pixels, (uint32_t)w, (uint32_t)h);
+    image_free(pixels);
+    return render_create_material((vec4_t){1.0f, 1.0f, 1.0f, 1.0f}, tex);
+}
+
+/* The scene: a procedural cube plus the OBJ test subjects in a row, each with
+   its own flat-colour material. Requires the renderer to be up (meshes and
+   materials are created immediately). */
+static void build_scene(app_t *app) {
+    /* spot ships with a texture; the rest are flat-coloured. Fall back to a
+       solid colour if the image can't be loaded. */
+    material_handle_t spot_mat = textured(MODEL_PATH("spot.png"));
+    if (spot_mat == RENDER_MATERIAL_INVALID) {
+        spot_mat = solid(0.90f, 0.85f, 0.80f);
+    }
+
+    struct {
+        const char *path; /* NULL = procedural cube */
+        material_handle_t mat;
+    } items[] = {
+        {NULL, solid(0.85f, 0.55f, 0.25f)},
+        {MODEL_PATH("cow.obj"), solid(0.80f, 0.30f, 0.30f)},
+        {MODEL_PATH("spot.obj"), spot_mat},
+        {MODEL_PATH("fandisk.obj"), solid(0.45f, 0.65f, 0.85f)},
+        {MODEL_PATH("cheburashka.obj"), solid(0.55f, 0.45f, 0.70f)},
+        {MODEL_PATH("armadillo.obj"), solid(0.55f, 0.75f, 0.45f)},
+    };
+    const int count = (int)(sizeof(items) / sizeof(items[0]));
+    const float spacing = 2.8f;
+    float x0 = -spacing * (float)(count - 1) * 0.5f;
+
+    for (int i = 0; i < count; i++) {
+        float x = x0 + spacing * (float)i;
+        if (items[i].path) {
+            load_model(app, items[i].path, items[i].mat, x);
+        } else {
+            cpu_mesh_t cube;
+            if (cpu_mesh_cube(&cube)) {
+                place_cpu_mesh(app, &cube, items[i].mat, x);
+                cpu_mesh_free(&cube);
+            }
+        }
     }
 }
 
@@ -91,8 +131,9 @@ bool app_init(app_t *app) {
     app->transform_id = component_register(app->world, "transform",
                                            sizeof(transform_t),
                                            _Alignof(transform_t));
-    app->mesh_id = component_register(app->world, "mesh", sizeof(mesh_handle_t),
-                                      _Alignof(mesh_handle_t));
+    app->renderable_id =
+        component_register(app->world, "renderable", sizeof(renderable_t),
+                           _Alignof(renderable_t));
 
     app->window = window_create("Kiln", 1280, 720);
     if (!app->window) {
@@ -116,7 +157,7 @@ static query_iter_t renderable_query(app_t *app) {
     signature_t require;
     signature_clear(&require);
     signature_set(&require, app->transform_id);
-    signature_set(&require, app->mesh_id);
+    signature_set(&require, app->renderable_id);
     return query_iter(app->world, (query_desc_t){.require = require});
 }
 
@@ -132,8 +173,9 @@ static void render_scene(app_t *app) {
     query_iter_t it = renderable_query(app);
     while (query_next(&it)) {
         transform_t *t = query_get(&it, app->transform_id);
-        mesh_handle_t *mesh = query_get(&it, app->mesh_id);
-        render_mesh(*mesh, mat4_from_trs(t->position, t->rotation, t->scale));
+        renderable_t *r = query_get(&it, app->renderable_id);
+        render_mesh(r->mesh, r->material,
+                    mat4_from_trs(t->position, t->rotation, t->scale));
     }
 }
 

@@ -16,13 +16,19 @@ typedef struct {
     vec3_t scale;
 } transform_t;
 
+/* A drawable: which mesh, rendered with which material. */
+typedef struct {
+    mesh_handle_t mesh;
+    material_handle_t material;
+} renderable_t;
+
 /* Owns the engine subsystems for one running instance. Fields accrete
  * here as subsystems come online, keeping main.c a thin entry point. */
 typedef struct {
     window_t *window;
     world_t *world;
     component_id_t transform_id;
-    component_id_t mesh_id; /* stores a mesh_handle_t */
+    component_id_t renderable_id; /* stores a renderable_t */
     camera_t camera;
 } app_t;
 

@@ -89,6 +89,7 @@ bool cpu_mesh_cube(cpu_mesh_t *out) {
     out->index_count = 36;
     for (uint32_t i = 0; i < 8; i++) {
         out->vertices[i].position = pos[i];
+        out->vertices[i].uv = (vec2_t){0.0f, 0.0f}; /* untextured */
     }
     for (uint32_t i = 0; i < 36; i++) {
         out->indices[i] = idx[i];

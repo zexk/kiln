@@ -16,7 +16,14 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define MODEL_PATH(name) KILN_ASSET_DIR "/models/" name
+/* Where models/textures live, resolved at runtime (env override, else the
+   installed share/kiln/assets, else the build-time source dir). */
+static char g_asset_dir[1024];
+
+static const char *model_path(char *buf, size_t cap, const char *file) {
+    snprintf(buf, cap, "%s/models/%s", g_asset_dir, file);
+    return buf;
+}
 
 static material_handle_t solid(float r, float g, float b) {
     return render_create_material((vec4_t){r, g, b, 1.0f},
@@ -99,9 +106,16 @@ static entity_t spawn(app_t *app, int proto, vec3_t at) {
     return e;
 }
 
-/* Register the prototypes and lay one of each out in a starting row. */
+/* Register the prototypes and lay one of each out in a starting row. Models
+   that fail to load (e.g. not fetched) are skipped; the procedural cube always
+   works, so the app runs even with no asset files present. */
 static void build_scene(app_t *app) {
-    material_handle_t spot_mat = textured(MODEL_PATH("spot.png"));
+    core_resource_dir(g_asset_dir, sizeof(g_asset_dir), "KILN_ASSET_DIR",
+                      "assets", KILN_ASSET_DIR);
+
+    char path[1200];
+    material_handle_t spot_mat =
+        textured(model_path(path, sizeof(path), "spot.png"));
     if (spot_mat == RENDER_MATERIAL_INVALID) {
         spot_mat = solid(0.90f, 0.85f, 0.80f);
     }
@@ -112,13 +126,17 @@ static void build_scene(app_t *app) {
         add_prototype(app, "CUBE", &cube, solid(0.85f, 0.55f, 0.25f));
         cpu_mesh_free(&cube);
     }
-    load_prototype(app, "COW", MODEL_PATH("cow.obj"), solid(0.80f, 0.30f, 0.30f));
-    load_prototype(app, "SPOT", MODEL_PATH("spot.obj"), spot_mat);
-    load_prototype(app, "FANDISK", MODEL_PATH("fandisk.obj"),
+    load_prototype(app, "COW", model_path(path, sizeof(path), "cow.obj"),
+                   solid(0.80f, 0.30f, 0.30f));
+    load_prototype(app, "SPOT", model_path(path, sizeof(path), "spot.obj"),
+                   spot_mat);
+    load_prototype(app, "FANDISK", model_path(path, sizeof(path), "fandisk.obj"),
                    solid(0.45f, 0.65f, 0.85f));
-    load_prototype(app, "CHEBURASHKA", MODEL_PATH("cheburashka.obj"),
+    load_prototype(app, "CHEBURASHKA",
+                   model_path(path, sizeof(path), "cheburashka.obj"),
                    solid(0.55f, 0.45f, 0.70f));
-    load_prototype(app, "ARMADILLO", MODEL_PATH("armadillo.obj"),
+    load_prototype(app, "ARMADILLO",
+                   model_path(path, sizeof(path), "armadillo.obj"),
                    solid(0.55f, 0.75f, 0.45f));
 
     const float spacing = 2.8f;

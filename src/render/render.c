@@ -3,6 +3,7 @@
 #include <X11/Xlib.h>
 
 #include "render.h"
+#include "core.h"
 #include "linalg.h"
 #include "mesh.h"
 #include "font8x8.h"
@@ -147,6 +148,7 @@ static struct {
     uint32_t text_vert_count;
 
     float clear_color[3];
+    char shader_dir[1024]; /* resolved at init; .spv files live here */
 } g;
 
 /* ----------------------------------------------------------------------- */
@@ -286,8 +288,8 @@ static bool read_file(const char *path, uint32_t **out_data, size_t *out_size) {
 }
 
 static bool create_shader_module(const char *name, VkShaderModule *out) {
-    char path[1024];
-    snprintf(path, sizeof(path), "%s/%s.spv", KILN_SHADER_DIR, name);
+    char path[2048];
+    snprintf(path, sizeof(path), "%s/%s.spv", g.shader_dir, name);
 
     uint32_t *code;
     size_t size;
@@ -1332,6 +1334,8 @@ bool render_init(window_t *window) {
     g.clear_color[0] = 0.02f;
     g.clear_color[1] = 0.02f;
     g.clear_color[2] = 0.05f;
+    core_resource_dir(g.shader_dir, sizeof(g.shader_dir), "KILN_SHADER_DIR",
+                      "shaders", KILN_SHADER_DIR);
 
     if (!create_instance() || !create_surface() || !pick_physical_device() ||
         !create_device() || !create_swapchain() || !create_depth_resources() ||

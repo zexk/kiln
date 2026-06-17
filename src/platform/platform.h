@@ -23,11 +23,22 @@ typedef enum {
 } keycode_t;
 
 typedef enum {
+    MOUSE_BUTTON_NONE = 0,
+    MOUSE_BUTTON_LEFT,
+    MOUSE_BUTTON_MIDDLE,
+    MOUSE_BUTTON_RIGHT,
+} mouse_button_t;
+
+typedef enum {
     EVENT_NONE = 0,
     EVENT_QUIT,     /* WM close request (window manager "X" button). */
     EVENT_KEY_DOWN,
     EVENT_KEY_UP,
     EVENT_RESIZE,
+    EVENT_MOUSE_MOVE,   /* pointer moved; carries absolute window coords. */
+    EVENT_BUTTON_DOWN,
+    EVENT_BUTTON_UP,
+    EVENT_SCROLL,       /* wheel; delta is +1 (up/away) or -1 (down/toward). */
 } event_type_t;
 
 typedef struct {
@@ -40,6 +51,18 @@ typedef struct {
             uint32_t width;
             uint32_t height;
         } resize;
+        struct {
+            int32_t x; /* absolute, window top-left origin, +y down */
+            int32_t y;
+        } motion;
+        struct {
+            mouse_button_t button;
+            int32_t x;
+            int32_t y;
+        } button;
+        struct {
+            float delta;
+        } scroll;
     };
 } event_t;
 

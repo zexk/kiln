@@ -1,5 +1,6 @@
 #include "app.h"
 
+#include "camera.h"
 #include "core.h"
 #include "linalg.h"
 #include "render.h"
@@ -7,7 +8,6 @@
 
 #include <stdint.h>
 #include <stdlib.h>
-#include <time.h>
 
 /* A small grid of cubes so the ECS-driven render path has something to chew
    on. Each becomes one entity with a transform component. */
@@ -34,6 +34,8 @@ bool app_init(app_t *app) {
                                            _Alignof(transform_t));
     spawn_scene(app);
 
+    camera_init(&app->camera);
+
     app->window = window_create("Kiln", 1280, 720);
     if (!app->window) {
         return false;
@@ -54,27 +56,14 @@ static query_iter_t transform_query(app_t *app) {
     return query_iter(app->world, (query_desc_t){.require = require});
 }
 
-/* Rotate every transform about the Y axis; the ECS query is the engine doing
-   real per-entity work each frame. */
-static void rotate_system(app_t *app, float dt) {
-    query_iter_t it = transform_query(app);
-    quat_t spin = quat_from_axis_angle((vec3_t){0, 1, 0}, dt * 0.8f);
-    while (query_next(&it)) {
-        transform_t *t = query_get(&it, app->transform_id);
-        t->rotation = quat_normalize(quat_mul(spin, t->rotation));
-    }
-}
-
-/* Set the camera, then queue one cube per transform entity. */
+/* Aim the camera, then queue one cube per transform entity. */
 static void render_scene(app_t *app) {
     uint32_t w, h;
     window_size(app->window, &w, &h);
     float aspect = h ? (float)w / (float)h : 1.0f;
 
-    mat4_t view = mat4_look_at((vec3_t){6.0f, 5.0f, 8.0f}, (vec3_t){0, 0, 0},
-                               (vec3_t){0, 1, 0});
-    mat4_t proj = mat4_perspective(kln_radians(60.0f), aspect, 0.1f, 100.0f);
-    render_set_camera(view, proj);
+    render_set_camera(camera_view(&app->camera),
+                      camera_proj(&app->camera, aspect));
 
     query_iter_t it = transform_query(app);
     while (query_next(&it)) {
@@ -90,9 +79,6 @@ void app_run(app_t *app) {
     uint64_t max_frames = cap ? strtoull(cap, NULL, 10) : 0;
     uint64_t frames = 0;
 
-    struct timespec prev;
-    clock_gettime(CLOCK_MONOTONIC, &prev);
-
     bool running = true;
     while (running) {
         event_t event;
@@ -107,22 +93,16 @@ void app_run(app_t *app) {
                 }
                 break;
             default:
+                camera_handle_event(&app->camera, &event);
                 break;
             }
         }
 
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        float dt = (float)(now.tv_sec - prev.tv_sec) +
-                   (float)(now.tv_nsec - prev.tv_nsec) * 1e-9f;
-        prev = now;
-
-        rotate_system(app, dt);
         render_scene(app);
 
         render_text(16.0f, 16.0f, 3.0f, 0.9f, 0.9f, 0.2f, "KILN DEBUG");
         render_text(16.0f, 48.0f, 2.0f, 0.6f, 0.8f, 1.0f,
-                    "the quick brown fox 0123456789");
+                    "LMB ORBIT  RMB PAN  WHEEL ZOOM");
         render_draw();
 
         if (max_frames && ++frames >= max_frames) {

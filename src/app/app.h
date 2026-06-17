@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 
+#include "camera.h"
 #include "linalg.h"
 #include "platform.h"
 #include "ecs.h"
@@ -20,6 +21,7 @@ typedef struct {
     window_t *window;
     world_t *world;
     component_id_t transform_id;
+    camera_t camera;
 } app_t;
 
 bool app_init(app_t *app);

@@ -32,6 +32,15 @@ static keycode_t keysym_to_code(KeySym keysym) {
     }
 }
 
+static mouse_button_t x11_button_to_code(unsigned int button) {
+    switch (button) {
+    case Button1: return MOUSE_BUTTON_LEFT;
+    case Button2: return MOUSE_BUTTON_MIDDLE;
+    case Button3: return MOUSE_BUTTON_RIGHT;
+    default:      return MOUSE_BUTTON_NONE;
+    }
+}
+
 window_t *window_create(const char *title, uint32_t width, uint32_t height) {
     window_t *window = calloc(1, sizeof(*window));
     if (!window) {
@@ -51,7 +60,8 @@ window_t *window_create(const char *title, uint32_t width, uint32_t height) {
     Window root = RootWindow(window->display, screen);
 
     XSetWindowAttributes attrs;
-    attrs.event_mask = KeyPressMask | KeyReleaseMask | StructureNotifyMask;
+    attrs.event_mask = KeyPressMask | KeyReleaseMask | StructureNotifyMask |
+                       ButtonPressMask | ButtonReleaseMask | PointerMotionMask;
 
     window->handle = XCreateWindow(
         window->display, root,
@@ -104,6 +114,32 @@ bool window_poll_event(window_t *window, event_t *out) {
     case KeyRelease:
         out->type = EVENT_KEY_UP;
         out->key.code = keysym_to_code(XLookupKeysym(&ev.xkey, 0));
+        break;
+    case MotionNotify:
+        out->type = EVENT_MOUSE_MOVE;
+        out->motion.x = ev.xmotion.x;
+        out->motion.y = ev.xmotion.y;
+        break;
+    case ButtonPress:
+    case ButtonRelease:
+        /* X11 buttons: 1 left, 2 middle, 3 right, 4/5 wheel up/down. */
+        switch (ev.xbutton.button) {
+        case Button4:
+        case Button5:
+            if (ev.type == ButtonPress) { /* wheel only reports on press */
+                out->type = EVENT_SCROLL;
+                out->scroll.delta = (ev.xbutton.button == Button4) ? 1.0f
+                                                                   : -1.0f;
+            }
+            break;
+        default:
+            out->type =
+                (ev.type == ButtonPress) ? EVENT_BUTTON_DOWN : EVENT_BUTTON_UP;
+            out->button.button = x11_button_to_code(ev.xbutton.button);
+            out->button.x = ev.xbutton.x;
+            out->button.y = ev.xbutton.y;
+            break;
+        }
         break;
     case ConfigureNotify:
         if ((uint32_t)ev.xconfigure.width != window->width ||

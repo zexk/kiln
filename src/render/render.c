@@ -1175,6 +1175,26 @@ void render_rect(float x, float y, float w, float h, float r, float g_,
     push_text_vertex(x, y + h, r, g_, b);
 }
 
+void render_line(float x0, float y0, float x1, float y1, float thickness,
+                 float r, float g_, float b) {
+    float dx = x1 - x0;
+    float dy = y1 - y0;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 1e-4f) {
+        return;
+    }
+    float hw = thickness * 0.5f;
+    float nx = -dy / len * hw; /* perpendicular, scaled to half-thickness */
+    float ny = dx / len * hw;
+
+    push_text_vertex(x0 + nx, y0 + ny, r, g_, b);
+    push_text_vertex(x1 + nx, y1 + ny, r, g_, b);
+    push_text_vertex(x1 - nx, y1 - ny, r, g_, b);
+    push_text_vertex(x0 + nx, y0 + ny, r, g_, b);
+    push_text_vertex(x1 - nx, y1 - ny, r, g_, b);
+    push_text_vertex(x0 - nx, y0 - ny, r, g_, b);
+}
+
 void render_set_clear_color(float r, float g_, float b) {
     g.clear_color[0] = r;
     g.clear_color[1] = g_;

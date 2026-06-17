@@ -3,6 +3,7 @@
 #include <stdbool.h>
 
 #include "camera.h"
+#include "gizmo.h"
 #include "linalg.h"
 #include "platform.h"
 #include "render.h"
@@ -30,8 +31,7 @@ typedef struct {
     const char *name;
     mesh_handle_t mesh;
     material_handle_t material;
-    float scale;
-    vec3_t center;
+    float scale; /* uniform normalize-to-~2-units scale; mesh is pre-centred */
 } prototype_t;
 
 #define APP_MAX_PROTOTYPES 16
@@ -56,6 +56,8 @@ typedef struct {
     int sel_prototype;             /* which template ADD spawns */
     entity_t selected;             /* ECS_ENTITY_NULL if nothing selected */
     material_handle_t highlight_material;
+    gizmo_t gizmo;
+    bool gizmo_capture; /* gizmo owned the mouse last frame; gates camera */
 
     /* diagnostics + things the UI tampers with */
     float fps;

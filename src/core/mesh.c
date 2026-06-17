@@ -64,6 +64,19 @@ bool cpu_mesh_bounds(const cpu_mesh_t *mesh, vec3_t *out_min, vec3_t *out_max) {
     return true;
 }
 
+vec3_t cpu_mesh_recenter(cpu_mesh_t *mesh) {
+    vec3_t lo, hi;
+    if (!cpu_mesh_bounds(mesh, &lo, &hi)) {
+        return (vec3_t){0.0f, 0.0f, 0.0f};
+    }
+    vec3_t center = vec3_scale(vec3_add(lo, hi), 0.5f);
+    for (uint32_t i = 0; i < mesh->vertex_count; i++) {
+        mesh->vertices[i].position =
+            vec3_sub(mesh->vertices[i].position, center);
+    }
+    return center;
+}
+
 bool cpu_mesh_cube(cpu_mesh_t *out) {
     static const vec3_t pos[8] = {
         {-0.5f, -0.5f, -0.5f}, {0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, -0.5f},

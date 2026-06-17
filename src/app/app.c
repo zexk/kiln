@@ -2,6 +2,7 @@
 
 #include "camera.h"
 #include "core.h"
+#include "gizmo.h"
 #include "image.h"
 #include "linalg.h"
 #include "mesh.h"
@@ -11,6 +12,7 @@
 #include "assets.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 
@@ -35,14 +37,13 @@ static material_handle_t textured(const char *path) {
     return render_create_material((vec4_t){1.0f, 1.0f, 1.0f, 1.0f}, tex);
 }
 
-/* Register a spawnable prototype from a CPU mesh: upload it, record the
-   normalize-to-~2-units scale and local centre. Returns its index or -1. */
+/* Register a spawnable prototype from a CPU mesh: centre it on the origin
+   (so an entity's translation is its pivot), upload it, and record the
+   normalize-to-~2-units scale. Returns its index or -1. */
 static int add_prototype(app_t *app, const char *name, cpu_mesh_t *m,
                          material_handle_t mat) {
     vec3_t bmin, bmax;
-    mesh_handle_t mesh = render_upload_mesh(m);
-    if (app->prototype_count >= APP_MAX_PROTOTYPES ||
-        mesh == RENDER_MESH_INVALID || mat == RENDER_MATERIAL_INVALID ||
+    if (app->prototype_count >= APP_MAX_PROTOTYPES || mat == RENDER_MATERIAL_INVALID ||
         !cpu_mesh_bounds(m, &bmin, &bmax)) {
         return -1;
     }
@@ -55,12 +56,17 @@ static int add_prototype(app_t *app, const char *name, cpu_mesh_t *m,
         max_dim = extent.z;
     }
 
+    cpu_mesh_recenter(m);
+    mesh_handle_t mesh = render_upload_mesh(m);
+    if (mesh == RENDER_MESH_INVALID) {
+        return -1;
+    }
+
     prototype_t *p = &app->prototypes[app->prototype_count];
     p->name = name;
     p->mesh = mesh;
     p->material = mat;
     p->scale = (max_dim > 1e-6f) ? 2.0f / max_dim : 1.0f;
-    p->center = vec3_scale(vec3_add(bmin, bmax), 0.5f);
     return app->prototype_count++;
 }
 
@@ -85,8 +91,7 @@ static entity_t spawn(app_t *app, int proto, vec3_t at) {
     transform_t *t = entity_add_component(app->world, e, app->transform_id);
     t->rotation = quat_identity();
     t->scale = (vec3_t){p->scale, p->scale, p->scale};
-    /* position = at - scale*center, so the model's centre lands on `at`. */
-    t->position = vec3_sub(at, vec3_scale(p->center, p->scale));
+    t->position = at; /* mesh is pre-centred, so this is its pivot/visual centre */
 
     renderable_t *r = entity_add_component(app->world, e, app->renderable_id);
     r->mesh = p->mesh;
@@ -119,7 +124,10 @@ static void build_scene(app_t *app) {
     const float spacing = 2.8f;
     float x0 = -spacing * (float)(app->prototype_count - 1) * 0.5f;
     for (int i = 0; i < app->prototype_count; i++) {
-        spawn(app, i, (vec3_t){x0 + spacing * (float)i, 0.0f, 0.0f});
+        entity_t e = spawn(app, i, (vec3_t){x0 + spacing * (float)i, 0.0f, 0.0f});
+        if (i == 0) {
+            app->selected = e; /* start with a selection so the gizmo shows */
+        }
     }
 }
 
@@ -143,19 +151,20 @@ bool app_init(app_t *app) {
     }
     assets_init();
 
-    build_scene(app);
-
-    camera_init(&app->camera);
-    app->camera.distance = 16.0f;
-    app->camera.pitch = kln_radians(18.0f);
-
     ui_init(&app->ui);
+    gizmo_init(&app->gizmo);
     app->selected = ECS_ENTITY_NULL;
     app->sel_prototype = 0;
     app->spin_speed = 0.6f;
     app->bg_color[0] = 0.02f;
     app->bg_color[1] = 0.02f;
     app->bg_color[2] = 0.05f;
+
+    build_scene(app); /* may set an initial selection */
+
+    camera_init(&app->camera);
+    app->camera.distance = 16.0f;
+    app->camera.pitch = kln_radians(18.0f);
 
     return true;
 }
@@ -201,6 +210,36 @@ static void render_scene(app_t *app) {
         drawn++;
     }
     app->draw_count = drawn;
+}
+
+/* Drive the transform gizmo for the selected entity. Runs after the scene's
+   query has closed, so editing the transform in place is safe. */
+static void update_gizmo(app_t *app) {
+    app->gizmo_capture = false;
+    if (app->selected == ECS_ENTITY_NULL ||
+        !entity_is_alive(app->world, app->selected)) {
+        return;
+    }
+    transform_t *t =
+        entity_get_component(app->world, app->selected, app->transform_id);
+    if (!t) {
+        return;
+    }
+
+    uint32_t w, h;
+    window_size(app->window, &w, &h);
+    gizmo_input_t in = {
+        .mouse_x = app->mouse_x,
+        .mouse_y = app->mouse_y,
+        .mouse_down = app->mouse_left,
+        /* The gizmo may grab only when neither the camera nor the UI owns the
+           mouse. */
+        .pointer_valid =
+            !camera_is_navigating(&app->camera) && !app->ui_capture,
+    };
+    app->gizmo_capture =
+        gizmo_update(&app->gizmo, &app->camera, (float)w, (float)h, &in,
+                     &t->position, &t->rotation, &t->scale);
 }
 
 /* Snapshot the live renderable entities into `out` (so the world isn't mutated
@@ -292,6 +331,14 @@ static void build_ui(app_t *app) {
     }
 
     ui_text(&app->ui, "SEL: %s", selected_name(app));
+    if (app->selected != ECS_ENTITY_NULL) {
+        static const char *modes[] = {"MOVE", "ROTATE", "SCALE"};
+        char label[32];
+        snprintf(label, sizeof(label), "GIZMO: %s", modes[app->gizmo.mode]);
+        if (ui_button(&app->ui, label)) {
+            app->gizmo.mode = (gizmo_mode_t)(((int)app->gizmo.mode + 1) % 3);
+        }
+    }
     if (ui_button(&app->ui, "SELECT NEXT") && ecount > 0) {
         int cur = -1;
         for (int i = 0; i < ecount; i++) {
@@ -357,13 +404,14 @@ void app_run(app_t *app) {
                 break;
             }
 
-            /* The camera gets mouse events only when the UI didn't own the
-               mouse last frame; non-mouse events always pass through. */
+            /* The camera gets mouse events only when neither the UI nor the
+               gizmo owned the mouse last frame; non-mouse events always pass
+               through. */
             bool mouse_ev = event.type == EVENT_MOUSE_MOVE ||
                             event.type == EVENT_BUTTON_DOWN ||
                             event.type == EVENT_BUTTON_UP ||
                             event.type == EVENT_SCROLL;
-            if (!(mouse_ev && app->ui_capture)) {
+            if (!(mouse_ev && (app->ui_capture || app->gizmo_capture))) {
                 camera_handle_event(&app->camera, &event);
             }
         }
@@ -390,6 +438,7 @@ void app_run(app_t *app) {
         }
 
         render_scene(app);
+        update_gizmo(app);
         build_ui(app);
         render_draw();
 

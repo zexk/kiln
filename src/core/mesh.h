@@ -33,6 +33,11 @@ void cpu_mesh_compute_normals(cpu_mesh_t *mesh);
    mesh. Used to centre and scale loaded models to a viewable size. */
 bool cpu_mesh_bounds(const cpu_mesh_t *mesh, vec3_t *out_min, vec3_t *out_max);
 
+/* Translate all vertices so the AABB centre sits at the origin. Lets an entity
+   transform's translation act as the model's visual pivot. Returns the centre
+   that was removed (zero for an empty mesh). */
+vec3_t cpu_mesh_recenter(cpu_mesh_t *mesh);
+
 /* Generate a unit cube centred on the origin with smooth (well, per-corner)
    normals — a dependency-free baseline mesh that always renders. */
 bool cpu_mesh_cube(cpu_mesh_t *out);

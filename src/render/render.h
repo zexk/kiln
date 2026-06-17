@@ -60,6 +60,11 @@ void render_text(float x, float y, float scale, float r, float g, float b,
    Call before render_draw. */
 void render_rect(float x, float y, float w, float h, float r, float g, float b);
 
+/* Queue a thick screen-space line (a quad) from (x0,y0) to (x1,y1). Same
+   overlay stream as render_rect. */
+void render_line(float x0, float y0, float x1, float y1, float thickness,
+                 float r, float g, float b);
+
 /* Set the framebuffer clear colour (default a dark blue-grey). Persists. */
 void render_set_clear_color(float r, float g, float b);
 

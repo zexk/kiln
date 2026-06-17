@@ -21,16 +21,19 @@ typedef struct {
     float far;  /* far plane */
 
     /* drag state */
-    int32_t last_x;
-    int32_t last_y;
     bool orbiting; /* left button held */
     bool panning;  /* right button held */
 } camera_t;
 
 void camera_init(camera_t *cam);
 
-/* Feed every window event here; non-input events are ignored. */
+/* Feed every window event here; non-input events are ignored. Mouse motion is
+   consumed as relative deltas, so it behaves identically whether the cursor is
+   free or captured (CURSOR_DISABLED). */
 void camera_handle_event(camera_t *cam, const event_t *ev);
+
+/* True while a drag is in progress — the app uses this to capture the cursor. */
+bool camera_is_navigating(const camera_t *cam);
 
 vec3_t camera_eye(const camera_t *cam);
 mat4_t camera_view(const camera_t *cam);

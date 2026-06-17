@@ -19,8 +19,6 @@ void camera_init(camera_t *cam) {
     cam->fov = kln_radians(60.0f);
     cam->near = 0.1f;
     cam->far = 200.0f;
-    cam->last_x = 0;
-    cam->last_y = 0;
     cam->orbiting = false;
     cam->panning = false;
 }
@@ -61,6 +59,10 @@ static void pan(camera_t *cam, int dx, int dy) {
     cam->target = vec3_add(cam->target, move);
 }
 
+bool camera_is_navigating(const camera_t *cam) {
+    return cam->orbiting || cam->panning;
+}
+
 void camera_handle_event(camera_t *cam, const event_t *ev) {
     switch (ev->type) {
     case EVENT_BUTTON_DOWN:
@@ -69,8 +71,6 @@ void camera_handle_event(camera_t *cam, const event_t *ev) {
         } else if (ev->button.button == MOUSE_BUTTON_RIGHT) {
             cam->panning = true;
         }
-        cam->last_x = ev->button.x;
-        cam->last_y = ev->button.y;
         break;
     case EVENT_BUTTON_UP:
         if (ev->button.button == MOUSE_BUTTON_LEFT) {
@@ -79,19 +79,14 @@ void camera_handle_event(camera_t *cam, const event_t *ev) {
             cam->panning = false;
         }
         break;
-    case EVENT_MOUSE_MOVE: {
-        int dx = ev->motion.x - cam->last_x;
-        int dy = ev->motion.y - cam->last_y;
-        cam->last_x = ev->motion.x;
-        cam->last_y = ev->motion.y;
+    case EVENT_MOUSE_MOVE:
         if (cam->orbiting) {
-            orbit(cam, dx, dy);
+            orbit(cam, ev->motion.dx, ev->motion.dy);
         }
         if (cam->panning) {
-            pan(cam, dx, dy);
+            pan(cam, ev->motion.dx, ev->motion.dy);
         }
         break;
-    }
     case EVENT_SCROLL:
         cam->distance *= (ev->scroll.delta > 0.0f) ? ZOOM_FACTOR
                                                    : 1.0f / ZOOM_FACTOR;

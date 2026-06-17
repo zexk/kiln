@@ -30,6 +30,15 @@ typedef enum {
 } mouse_button_t;
 
 typedef enum {
+    /* Cursor visible and free to move; motion events carry real positions. */
+    CURSOR_NORMAL = 0,
+    /* Cursor hidden and locked to the window; motion is reported as unbounded
+       relative deltas (the pointer is re-centred behind the scenes). This is
+       the mode for drag-orbit and FPS-style mouselook. */
+    CURSOR_DISABLED,
+} cursor_mode_t;
+
+typedef enum {
     EVENT_NONE = 0,
     EVENT_QUIT,     /* WM close request (window manager "X" button). */
     EVENT_KEY_DOWN,
@@ -54,6 +63,8 @@ typedef struct {
         struct {
             int32_t x; /* absolute, window top-left origin, +y down */
             int32_t y;
+            int32_t dx; /* delta since the previous motion event */
+            int32_t dy; /* (the reliable signal under CURSOR_DISABLED) */
         } motion;
         struct {
             mouse_button_t button;
@@ -79,6 +90,11 @@ bool window_poll_event(window_t *window, event_t *out);
 void window_wait_events(window_t *window);
 
 void window_size(const window_t *window, uint32_t *width, uint32_t *height);
+
+/* Switch cursor capture mode. Idempotent: setting the current mode is a no-op,
+   so it is safe to call every frame from the camera/input glue. */
+void window_set_cursor_mode(window_t *window, cursor_mode_t mode);
+cursor_mode_t window_cursor_mode(const window_t *window);
 
 /* Native X11 handles for VkXlibSurfaceKHR creation. Returned as void* and
    unsigned long so callers need not include Xlib; the renderer casts the

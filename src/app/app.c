@@ -98,6 +98,13 @@ void app_run(app_t *app) {
             }
         }
 
+        /* Capture the cursor while dragging so orbit/pan can run unbounded and
+           never slip off the window; release it the moment the drag ends. */
+        window_set_cursor_mode(app->window,
+                               camera_is_navigating(&app->camera)
+                                   ? CURSOR_DISABLED
+                                   : CURSOR_NORMAL);
+
         render_scene(app);
 
         render_text(16.0f, 16.0f, 3.0f, 0.9f, 0.9f, 0.2f, "KILN DEBUG");

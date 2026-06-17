@@ -61,6 +61,18 @@ void camera_ray(const camera_t *cam, float aspect, float screen_x,
     *out_dir = vec3_normalize(vec3_sub(far, near));
 }
 
+bool camera_project(const camera_t *cam, float aspect, float sw, float sh,
+                    vec3_t world, float *out_x, float *out_y) {
+    mat4_t vp = mat4_mul(camera_proj(cam, aspect), camera_view(cam));
+    vec4_t c = mat4_mul_vec4(vp, (vec4_t){world.x, world.y, world.z, 1.0f});
+    if (c.w <= 1e-5f) {
+        return false;
+    }
+    *out_x = (c.x / c.w * 0.5f + 0.5f) * sw;
+    *out_y = (1.0f - (c.y / c.w * 0.5f + 0.5f)) * sh;
+    return true;
+}
+
 static void orbit(camera_t *cam, int dx, int dy) {
     cam->yaw -= (float)dx * ORBIT_SENSITIVITY;
     cam->pitch += (float)dy * ORBIT_SENSITIVITY;

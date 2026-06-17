@@ -45,3 +45,8 @@ mat4_t camera_proj(const camera_t *cam, float aspect);
 void camera_ray(const camera_t *cam, float aspect, float screen_x,
                 float screen_y, float screen_w, float screen_h,
                 vec3_t *out_origin, vec3_t *out_dir);
+
+/* Project a world point to overlay pixels (top-left origin, +y down). Returns
+   false if the point is behind the near plane. Inverse of camera_ray. */
+bool camera_project(const camera_t *cam, float aspect, float sw, float sh,
+                    vec3_t world, float *out_x, float *out_y);

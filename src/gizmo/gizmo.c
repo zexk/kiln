@@ -31,21 +31,6 @@ void gizmo_init(gizmo_t *g) {
     g->last_y = 0.0f;
 }
 
-/* World point -> 2D overlay pixels (top-left origin, +y down). Returns false if
-   behind the camera. Mirrors the renderer's negative-viewport Y flip. */
-static bool project(const camera_t *cam, float aspect, float sw, float sh,
-                    vec3_t world, float *ox, float *oy) {
-    mat4_t vp = mat4_mul(camera_proj(cam, aspect), camera_view(cam));
-    vec4_t c = mat4_mul_vec4(vp, (vec4_t){world.x, world.y, world.z, 1.0f});
-    if (c.w <= 1e-5f) {
-        return false;
-    }
-    float nx = c.x / c.w;
-    float ny = c.y / c.w;
-    *ox = (nx * 0.5f + 0.5f) * sw;
-    *oy = (1.0f - (ny * 0.5f + 0.5f)) * sh;
-    return true;
-}
 
 /* Distance from point p to segment ab, in 2D. */
 static float seg_dist(float px, float py, float ax, float ay, float bx,
@@ -85,7 +70,7 @@ bool gizmo_update(gizmo_t *g, const camera_t *cam, float screen_w,
     float length = vec3_distance(camera_eye(cam), *pos) * GIZMO_SCREEN_FRAC;
 
     float ox, oy;
-    if (!project(cam, aspect, screen_w, screen_h, *pos, &ox, &oy)) {
+    if (!camera_project(cam, aspect, screen_w, screen_h, *pos, &ox, &oy)) {
         return false; /* pivot behind camera */
     }
 
@@ -93,8 +78,8 @@ bool gizmo_update(gizmo_t *g, const camera_t *cam, float screen_w,
     bool tip_ok[3];
     for (int i = 0; i < 3; i++) {
         vec3_t tip = vec3_add(*pos, vec3_scale(AXIS_DIR[i], length));
-        tip_ok[i] = project(cam, aspect, screen_w, screen_h, tip, &tip_x[i],
-                            &tip_y[i]);
+        tip_ok[i] = camera_project(cam, aspect, screen_w, screen_h, tip,
+                                   &tip_x[i], &tip_y[i]);
     }
 
     bool down = in->mouse_down;

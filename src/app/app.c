@@ -415,20 +415,6 @@ static void pick_at(app_t *app, float px, float py) {
     app->selected = pick_entity(app, origin, dir);
 }
 
-/* World point -> overlay pixels, same convention as the gizmo's project(). */
-static bool project_point(const app_t *app, float aspect, float sw, float sh,
-                          vec3_t world, float *ox, float *oy) {
-    mat4_t vp =
-        mat4_mul(camera_proj(&app->camera, aspect), camera_view(&app->camera));
-    vec4_t c = mat4_mul_vec4(vp, (vec4_t){world.x, world.y, world.z, 1.0f});
-    if (c.w <= 1e-5f) {
-        return false;
-    }
-    *ox = (c.x / c.w * 0.5f + 0.5f) * sw;
-    *oy = (1.0f - (c.y / c.w * 0.5f + 0.5f)) * sh;
-    return true;
-}
-
 /* Headless check that camera_ray round-trips the projection: project each
    entity's centre to a pixel, cast a ray back through it, and confirm the pick
    lands on that entity. Catches a flipped axis or a bad inverse before any
@@ -444,8 +430,8 @@ static void run_pick_selftest(app_t *app) {
         transform_t *t = query_get(&it, app->transform_id);
         entity_t e = query_entity(&it);
         float sx, sy;
-        if (!project_point(app, aspect, (float)w, (float)h, t->position, &sx,
-                           &sy)) {
+        if (!camera_project(&app->camera, aspect, (float)w, (float)h,
+                            t->position, &sx, &sy)) {
             continue;
         }
         vec3_t origin, dir;

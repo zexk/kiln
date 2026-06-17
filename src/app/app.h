@@ -6,6 +6,7 @@
 #include "linalg.h"
 #include "platform.h"
 #include "render.h"
+#include "ui.h"
 #include "ecs.h"
 
 /* World-space placement of an entity. The only component for now; lives here
@@ -30,6 +31,18 @@ typedef struct {
     component_id_t transform_id;
     component_id_t renderable_id; /* stores a renderable_t */
     camera_t camera;
+
+    ui_t ui;
+    bool ui_capture; /* UI owned the mouse last frame; gates camera input */
+    float mouse_x, mouse_y;
+    bool mouse_left;
+
+    /* diagnostics + things the UI tampers with */
+    float fps;
+    uint32_t draw_count;
+    bool auto_rotate;
+    float spin_speed;
+    float bg_color[3];
 } app_t;
 
 bool app_init(app_t *app);

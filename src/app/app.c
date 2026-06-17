@@ -7,10 +7,12 @@
 #include "mesh.h"
 #include "obj.h"
 #include "render.h"
+#include "ui.h"
 #include "assets.h"
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <time.h>
 
 #define MODEL_PATH(name) KILN_ASSET_DIR "/models/" name
 
@@ -150,6 +152,12 @@ bool app_init(app_t *app) {
     app->camera.distance = 16.0f;
     app->camera.pitch = kln_radians(18.0f);
 
+    ui_init(&app->ui);
+    app->spin_speed = 0.6f;
+    app->bg_color[0] = 0.02f;
+    app->bg_color[1] = 0.02f;
+    app->bg_color[2] = 0.05f;
+
     return true;
 }
 
@@ -161,6 +169,17 @@ static query_iter_t renderable_query(app_t *app) {
     return query_iter(app->world, (query_desc_t){.require = require});
 }
 
+/* Spin every model about its local Y axis — an opt-in ECS system the UI drives,
+   so toggling the checkbox visibly does something. */
+static void rotate_system(app_t *app, float dt) {
+    quat_t spin = quat_from_axis_angle((vec3_t){0, 1, 0}, app->spin_speed * dt);
+    query_iter_t it = renderable_query(app);
+    while (query_next(&it)) {
+        transform_t *t = query_get(&it, app->transform_id);
+        t->rotation = quat_normalize(quat_mul(spin, t->rotation));
+    }
+}
+
 /* Aim the camera, then queue one draw per renderable entity. */
 static void render_scene(app_t *app) {
     uint32_t w, h;
@@ -170,13 +189,62 @@ static void render_scene(app_t *app) {
     render_set_camera(camera_view(&app->camera),
                       camera_proj(&app->camera, aspect));
 
+    uint32_t drawn = 0;
     query_iter_t it = renderable_query(app);
     while (query_next(&it)) {
         transform_t *t = query_get(&it, app->transform_id);
         renderable_t *r = query_get(&it, app->renderable_id);
         render_mesh(r->mesh, r->material,
                     mat4_from_trs(t->position, t->rotation, t->scale));
+        drawn++;
     }
+    app->draw_count = drawn;
+}
+
+/* Build the diagnostics / tamper panel and record whether it owns the mouse. */
+static void build_ui(app_t *app) {
+    uint32_t w, h;
+    window_size(app->window, &w, &h);
+
+    ui_input_t in = {
+        .mouse_x = app->mouse_x,
+        .mouse_y = app->mouse_y,
+        .mouse_down = app->mouse_left,
+        /* While orbiting/panning the real cursor is captured and warped, so its
+           position is meaningless to the UI — treat it as off-screen. */
+        .pointer_valid = !camera_is_navigating(&app->camera),
+    };
+
+    ui_begin(&app->ui, &in, (float)w, (float)h);
+    ui_panel_begin(&app->ui, 12.0f, 12.0f, 300.0f);
+
+    ui_text(&app->ui, "KILN  %.0f FPS  %.2f MS", (double)app->fps,
+            app->fps > 0.0f ? 1000.0 / (double)app->fps : 0.0);
+    ui_text(&app->ui, "DRAWS %u", app->draw_count);
+    ui_text(&app->ui, "CAM  Y%.0f P%.0f D%.1f",
+            (double)kln_degrees(app->camera.yaw),
+            (double)kln_degrees(app->camera.pitch),
+            (double)app->camera.distance);
+
+    ui_checkbox(&app->ui, "AUTO ROTATE", &app->auto_rotate);
+    ui_slider_float(&app->ui, "SPIN", &app->spin_speed, 0.0f, 3.0f);
+
+    ui_slider_float(&app->ui, "BG R", &app->bg_color[0], 0.0f, 1.0f);
+    ui_slider_float(&app->ui, "BG G", &app->bg_color[1], 0.0f, 1.0f);
+    ui_slider_float(&app->ui, "BG B", &app->bg_color[2], 0.0f, 1.0f);
+
+    if (ui_button(&app->ui, "RESET CAMERA")) {
+        camera_init(&app->camera);
+        app->camera.distance = 16.0f;
+        app->camera.pitch = kln_radians(18.0f);
+    }
+
+    ui_panel_end(&app->ui);
+    ui_end(&app->ui);
+
+    app->ui_capture = ui_wants_mouse(&app->ui);
+    render_set_clear_color(app->bg_color[0], app->bg_color[1],
+                           app->bg_color[2]);
 }
 
 void app_run(app_t *app) {
@@ -186,22 +254,48 @@ void app_run(app_t *app) {
     uint64_t max_frames = cap ? strtoull(cap, NULL, 10) : 0;
     uint64_t frames = 0;
 
+    struct timespec prev;
+    clock_gettime(CLOCK_MONOTONIC, &prev);
+
     bool running = true;
     while (running) {
         event_t event;
         while (window_poll_event(app->window, &event)) {
-            switch (event.type) {
-            case EVENT_QUIT:
+            if (event.type == EVENT_QUIT ||
+                (event.type == EVENT_KEY_DOWN &&
+                 event.key.code == KEY_ESCAPE)) {
                 running = false;
+                continue;
+            }
+
+            /* Track pointer state for the UI regardless of who consumes it. */
+            switch (event.type) {
+            case EVENT_MOUSE_MOVE:
+                app->mouse_x = (float)event.motion.x;
+                app->mouse_y = (float)event.motion.y;
                 break;
-            case EVENT_KEY_DOWN:
-                if (event.key.code == KEY_ESCAPE) {
-                    running = false;
+            case EVENT_BUTTON_DOWN:
+                if (event.button.button == MOUSE_BUTTON_LEFT) {
+                    app->mouse_left = true;
+                }
+                break;
+            case EVENT_BUTTON_UP:
+                if (event.button.button == MOUSE_BUTTON_LEFT) {
+                    app->mouse_left = false;
                 }
                 break;
             default:
-                camera_handle_event(&app->camera, &event);
                 break;
+            }
+
+            /* The camera gets mouse events only when the UI didn't own the
+               mouse last frame; non-mouse events always pass through. */
+            bool mouse_ev = event.type == EVENT_MOUSE_MOVE ||
+                            event.type == EVENT_BUTTON_DOWN ||
+                            event.type == EVENT_BUTTON_UP ||
+                            event.type == EVENT_SCROLL;
+            if (!(mouse_ev && app->ui_capture)) {
+                camera_handle_event(&app->camera, &event);
             }
         }
 
@@ -212,11 +306,22 @@ void app_run(app_t *app) {
                                    ? CURSOR_DISABLED
                                    : CURSOR_NORMAL);
 
-        render_scene(app);
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        float dt = (float)(now.tv_sec - prev.tv_sec) +
+                   (float)(now.tv_nsec - prev.tv_nsec) * 1e-9f;
+        prev = now;
+        if (dt > 0.0f) {
+            float inst = 1.0f / dt;
+            app->fps = (app->fps > 0.0f) ? app->fps * 0.9f + inst * 0.1f : inst;
+        }
 
-        render_text(16.0f, 16.0f, 3.0f, 0.9f, 0.9f, 0.2f, "KILN DEBUG");
-        render_text(16.0f, 48.0f, 2.0f, 0.6f, 0.8f, 1.0f,
-                    "LMB ORBIT  RMB PAN  WHEEL ZOOM");
+        if (app->auto_rotate) {
+            rotate_system(app, dt);
+        }
+
+        render_scene(app);
+        build_ui(app);
         render_draw();
 
         if (max_frames && ++frames >= max_frames) {

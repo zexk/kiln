@@ -13,8 +13,9 @@
 
 #define MAX_FRAMES_IN_FLIGHT 2
 
-/* Debug-text vertex budget per frame (each lit font pixel costs 6 verts). */
-#define MAX_TEXT_VERTS (64 * 1024)
+/* 2D overlay vertex budget per frame: debug text (each lit font pixel costs 6
+   verts) plus UI rectangles share this stream. */
+#define MAX_TEXT_VERTS (256 * 1024)
 
 /* Resident GPU resources and per-frame draw instances. */
 #define MAX_MESHES 256
@@ -144,6 +145,8 @@ static struct {
     void *text_mapped[MAX_FRAMES_IN_FLIGHT];
     text_vertex_t *text_verts; /* CPU staging, capacity MAX_TEXT_VERTS */
     uint32_t text_vert_count;
+
+    float clear_color[3];
 } g;
 
 /* ----------------------------------------------------------------------- */
@@ -1162,6 +1165,22 @@ void render_text(float x, float y, float scale, float r, float gr, float b,
     }
 }
 
+void render_rect(float x, float y, float w, float h, float r, float g_,
+                 float b) {
+    push_text_vertex(x, y, r, g_, b);
+    push_text_vertex(x + w, y, r, g_, b);
+    push_text_vertex(x + w, y + h, r, g_, b);
+    push_text_vertex(x, y, r, g_, b);
+    push_text_vertex(x + w, y + h, r, g_, b);
+    push_text_vertex(x, y + h, r, g_, b);
+}
+
+void render_set_clear_color(float r, float g_, float b) {
+    g.clear_color[0] = r;
+    g.clear_color[1] = g_;
+    g.clear_color[2] = b;
+}
+
 static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
                                   uint32_t instance_count,
                                   uint32_t text_verts) {
@@ -1188,9 +1207,9 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color.clearValue.color.float32[0] = 0.02f;
-    color.clearValue.color.float32[1] = 0.02f;
-    color.clearValue.color.float32[2] = 0.05f;
+    color.clearValue.color.float32[0] = g.clear_color[0];
+    color.clearValue.color.float32[1] = g.clear_color[1];
+    color.clearValue.color.float32[2] = g.clear_color[2];
     color.clearValue.color.float32[3] = 1.0f;
 
     VkRenderingAttachmentInfo depth = {0};
@@ -1290,6 +1309,9 @@ bool render_init(window_t *window) {
     g.window = window;
     g.view = mat4_identity();
     g.proj = mat4_identity();
+    g.clear_color[0] = 0.02f;
+    g.clear_color[1] = 0.02f;
+    g.clear_color[2] = 0.05f;
 
     if (!create_instance() || !create_surface() || !pick_physical_device() ||
         !create_device() || !create_swapchain() || !create_depth_resources() ||

@@ -55,6 +55,14 @@ void render_mesh(mesh_handle_t mesh, material_handle_t material, mat4_t model);
 void render_text(float x, float y, float scale, float r, float g, float b,
                  const char *str);
 
+/* Queue a filled screen-space rectangle (same overlay stream as render_text,
+   painter-ordered: submit backgrounds before the text drawn over them). Opaque.
+   Call before render_draw. */
+void render_rect(float x, float y, float w, float h, float r, float g, float b);
+
+/* Set the framebuffer clear colour (default a dark blue-grey). Persists. */
+void render_set_clear_color(float r, float g, float b);
+
 /* Acquire, record and present one frame. Recreates the swapchain
    transparently when the window is resized. */
 void render_draw(void);

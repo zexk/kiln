@@ -50,6 +50,9 @@ void app_run(app_t *app) {
             }
         }
 
+        render_text(16.0f, 16.0f, 3.0f, 0.9f, 0.9f, 0.2f, "KILN DEBUG");
+        render_text(16.0f, 48.0f, 2.0f, 0.6f, 0.8f, 1.0f,
+                    "the quick brown fox 0123456789");
         render_draw();
 
         if (max_frames && ++frames >= max_frames) {

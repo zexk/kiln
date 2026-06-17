@@ -4,6 +4,7 @@
 
 #include "render.h"
 #include "linalg.h"
+#include "font8x8.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +12,9 @@
 #include <time.h>
 
 #define MAX_FRAMES_IN_FLIGHT 2
+
+/* Debug-text vertex budget per frame (each lit font pixel costs 6 verts). */
+#define MAX_TEXT_VERTS (64 * 1024)
 
 #define VK_CHECK(x)                                                         \
     do {                                                                    \
@@ -26,6 +30,11 @@ typedef struct {
     float pos[3];
     float color[3];
 } vertex_t;
+
+typedef struct {
+    float pos[2]; /* screen pixels */
+    float color[3];
+} text_vertex_t;
 
 /* Unit cube centred on the origin; vertex colour derived from corner. */
 static const vertex_t k_cube_vertices[] = {
@@ -87,6 +96,16 @@ static struct {
     VkDeviceMemory vertex_memory;
     VkBuffer index_buffer;
     VkDeviceMemory index_memory;
+
+    /* Debug text: a screen-space 2D pipeline with per-frame-in-flight vertex
+       buffers (persistently mapped) fed from a CPU staging array. */
+    VkPipelineLayout text_layout;
+    VkPipeline text_pipeline;
+    VkBuffer text_buffer[MAX_FRAMES_IN_FLIGHT];
+    VkDeviceMemory text_memory[MAX_FRAMES_IN_FLIGHT];
+    void *text_mapped[MAX_FRAMES_IN_FLIGHT];
+    text_vertex_t *text_verts; /* CPU staging, capacity MAX_TEXT_VERTS */
+    uint32_t text_vert_count;
 
     struct timespec start_time;
 } g;
@@ -681,6 +700,163 @@ static bool create_pipeline(void) {
 }
 
 /* ----------------------------------------------------------------------- */
+/* text pipeline + buffers                                                  */
+/* ----------------------------------------------------------------------- */
+
+static bool create_text_pipeline(void) {
+    VkShaderModule vert, frag;
+    if (!create_shader_module("text.vert", &vert) ||
+        !create_shader_module("text.frag", &frag)) {
+        return false;
+    }
+
+    VkPipelineShaderStageCreateInfo stages[2] = {0};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+
+    VkVertexInputBindingDescription binding = {0};
+    binding.binding = 0;
+    binding.stride = sizeof(text_vertex_t);
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrs[2] = {0};
+    attrs[0].location = 0;
+    attrs[0].binding = 0;
+    attrs[0].format = VK_FORMAT_R32G32_SFLOAT;
+    attrs[0].offset = offsetof(text_vertex_t, pos);
+    attrs[1].location = 1;
+    attrs[1].binding = 0;
+    attrs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrs[1].offset = offsetof(text_vertex_t, color);
+
+    VkPipelineVertexInputStateCreateInfo vertex_input = {0};
+    vertex_input.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertex_input.vertexBindingDescriptionCount = 1;
+    vertex_input.pVertexBindingDescriptions = &binding;
+    vertex_input.vertexAttributeDescriptionCount = 2;
+    vertex_input.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo input_assembly = {0};
+    input_assembly.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewport_state = {0};
+    viewport_state.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.viewportCount = 1;
+    viewport_state.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo raster = {0};
+    raster.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    raster.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisample = {0};
+    multisample.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    /* Overlay: never touch depth, but the attachment is still bound. */
+    VkPipelineDepthStencilStateCreateInfo depth = {0};
+    depth.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depth.depthTestEnable = VK_FALSE;
+    depth.depthWriteEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState blend_attach = {0};
+    blend_attach.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo blend = {0};
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1;
+    blend.pAttachments = &blend_attach;
+
+    VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                       VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic = {0};
+    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic.dynamicStateCount = 2;
+    dynamic.pDynamicStates = dynamic_states;
+
+    VkPushConstantRange push = {0};
+    push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    push.offset = 0;
+    push.size = sizeof(float) * 2; /* screen size */
+
+    VkPipelineLayoutCreateInfo layout = {0};
+    layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout.pushConstantRangeCount = 1;
+    layout.pPushConstantRanges = &push;
+    VK_CHECK(vkCreatePipelineLayout(g.device, &layout, NULL, &g.text_layout));
+
+    /* Must declare the same attachment formats as the cube pipeline even
+       though depth is unused, or the formats mismatch the render scope. */
+    VkPipelineRenderingCreateInfo rendering = {0};
+    rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachmentFormats = &g.swapchain_format;
+    rendering.depthAttachmentFormat = g.depth_format;
+
+    VkGraphicsPipelineCreateInfo info = {0};
+    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.pNext = &rendering;
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &vertex_input;
+    info.pInputAssemblyState = &input_assembly;
+    info.pViewportState = &viewport_state;
+    info.pRasterizationState = &raster;
+    info.pMultisampleState = &multisample;
+    info.pDepthStencilState = &depth;
+    info.pColorBlendState = &blend;
+    info.pDynamicState = &dynamic;
+    info.layout = g.text_layout;
+    info.renderPass = VK_NULL_HANDLE;
+
+    VkResult res = vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &info,
+                                             NULL, &g.text_pipeline);
+    vkDestroyShaderModule(g.device, vert, NULL);
+    vkDestroyShaderModule(g.device, frag, NULL);
+    if (res != VK_SUCCESS) {
+        fprintf(stderr, "[render] text pipeline creation failed: %d\n", res);
+        return false;
+    }
+    return true;
+}
+
+static bool create_text_buffers(void) {
+    g.text_verts = malloc(sizeof(text_vertex_t) * MAX_TEXT_VERTS);
+    if (!g.text_verts) {
+        return false;
+    }
+    VkDeviceSize size = sizeof(text_vertex_t) * MAX_TEXT_VERTS;
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        if (!create_buffer(size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           &g.text_buffer[i], &g.text_memory[i])) {
+            return false;
+        }
+        VK_CHECK(vkMapMemory(g.device, g.text_memory[i], 0, size, 0,
+                             &g.text_mapped[i]));
+    }
+    return true;
+}
+
+/* ----------------------------------------------------------------------- */
 /* commands + sync                                                          */
 /* ----------------------------------------------------------------------- */
 
@@ -813,7 +989,57 @@ static mat4_t compute_mvp(void) {
     return mat4_mul(proj, mat4_mul(view, model));
 }
 
-static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index) {
+static void push_text_vertex(float x, float y, float r, float gr, float b) {
+    if (g.text_vert_count >= MAX_TEXT_VERTS) {
+        return;
+    }
+    text_vertex_t *v = &g.text_verts[g.text_vert_count++];
+    v->pos[0] = x;
+    v->pos[1] = y;
+    v->color[0] = r;
+    v->color[1] = gr;
+    v->color[2] = b;
+}
+
+void render_text(float x, float y, float scale, float r, float gr, float b,
+                 const char *str) {
+    float pen_x = x;
+    float pen_y = y;
+    for (const char *p = str; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '\n') {
+            pen_x = x;
+            pen_y += 8.0f * scale;
+            continue;
+        }
+        if (c >= 'a' && c <= 'z') {
+            c -= 32; /* fold to uppercase */
+        }
+        if (c < 0x20 || c > 0x5F) {
+            c = '?';
+        }
+        const uint8_t *glyph = kiln_font8x8[c - 0x20];
+        for (int row = 0; row < 8; row++) {
+            for (int col = 0; col < 8; col++) {
+                if (!(glyph[row] & (0x80 >> col))) {
+                    continue;
+                }
+                float px = pen_x + (float)col * scale;
+                float py = pen_y + (float)row * scale;
+                push_text_vertex(px, py, r, gr, b);
+                push_text_vertex(px + scale, py, r, gr, b);
+                push_text_vertex(px + scale, py + scale, r, gr, b);
+                push_text_vertex(px, py, r, gr, b);
+                push_text_vertex(px + scale, py + scale, r, gr, b);
+                push_text_vertex(px, py + scale, r, gr, b);
+            }
+        }
+        pen_x += 6.0f * scale; /* 5px glyph + 1px gap */
+    }
+}
+
+static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
+                                  uint32_t text_verts) {
     VkCommandBufferBeginInfo begin = {0};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &begin);
@@ -887,6 +1113,30 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index) {
     vkCmdDrawIndexed(cmd, sizeof(k_cube_indices) / sizeof(k_cube_indices[0]), 1,
                      0, 0, 0);
 
+    /* Debug text overlay: a positive-height viewport (top-left origin, +y
+       down) so it draws upright regardless of the cube's flipped viewport. */
+    if (text_verts > 0) {
+        VkViewport text_viewport = {0};
+        text_viewport.x = 0.0f;
+        text_viewport.y = 0.0f;
+        text_viewport.width = (float)g.extent.width;
+        text_viewport.height = (float)g.extent.height;
+        text_viewport.minDepth = 0.0f;
+        text_viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(cmd, 0, 1, &text_viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          g.text_pipeline);
+        VkDeviceSize text_offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &g.text_buffer[g.frame],
+                               &text_offset);
+        float screen[2] = {(float)g.extent.width, (float)g.extent.height};
+        vkCmdPushConstants(cmd, g.text_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                           sizeof(screen), screen);
+        vkCmdDraw(cmd, text_verts, 1, 0, 0);
+    }
+
     vkCmdEndRendering(cmd);
 
     image_barrier(cmd, g.images[image_index], VK_IMAGE_ASPECT_COLOR_BIT,
@@ -910,7 +1160,8 @@ bool render_init(window_t *window) {
 
     if (!create_instance() || !create_surface() || !pick_physical_device() ||
         !create_device() || !create_swapchain() || !create_depth_resources() ||
-        !create_pipeline() || !create_commands_and_sync()) {
+        !create_pipeline() || !create_text_pipeline() ||
+        !create_commands_and_sync()) {
         return false;
     }
 
@@ -919,19 +1170,32 @@ bool render_init(window_t *window) {
                               &g.vertex_buffer, &g.vertex_memory) ||
         !create_filled_buffer(k_cube_indices, sizeof(k_cube_indices),
                               VK_BUFFER_USAGE_INDEX_BUFFER_BIT, &g.index_buffer,
-                              &g.index_memory)) {
+                              &g.index_memory) ||
+        !create_text_buffers()) {
         return false;
     }
     return true;
 }
 
 void render_draw(void) {
+    /* Snapshot and clear the text queue up front so it never accumulates
+       across an early-return frame (e.g. resize). */
+    uint32_t text_verts = g.text_vert_count;
+    g.text_vert_count = 0;
+
     if (g.extent.width == 0 || g.extent.height == 0) {
         recreate_swapchain();
         return;
     }
 
     vkWaitForFences(g.device, 1, &g.in_flight[g.frame], VK_TRUE, UINT64_MAX);
+
+    /* Safe to write this frame's text buffer now the fence guarantees the GPU
+       has finished its previous use. */
+    if (text_verts > 0) {
+        memcpy(g.text_mapped[g.frame], g.text_verts,
+               sizeof(text_vertex_t) * text_verts);
+    }
 
     uint32_t image_index;
     VkResult acquire = vkAcquireNextImageKHR(
@@ -950,7 +1214,7 @@ void render_draw(void) {
 
     VkCommandBuffer cmd = g.command_buffers[g.frame];
     vkResetCommandBuffer(cmd, 0);
-    record_command_buffer(cmd, image_index);
+    record_command_buffer(cmd, image_index, text_verts);
 
     VkPipelineStageFlags wait_stage =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -994,11 +1258,19 @@ void render_shutdown(void) {
     vkFreeMemory(g.device, g.vertex_memory, NULL);
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroyBuffer(g.device, g.text_buffer[i], NULL);
+        vkFreeMemory(g.device, g.text_memory[i], NULL);
+    }
+    free(g.text_verts);
+
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(g.device, g.image_available[i], NULL);
         vkDestroyFence(g.device, g.in_flight[i], NULL);
     }
     vkDestroyCommandPool(g.device, g.command_pool, NULL);
 
+    vkDestroyPipeline(g.device, g.text_pipeline, NULL);
+    vkDestroyPipelineLayout(g.device, g.text_layout, NULL);
     vkDestroyPipeline(g.device, g.pipeline, NULL);
     vkDestroyPipelineLayout(g.device, g.pipeline_layout, NULL);
 

@@ -118,22 +118,26 @@ bool gizmo_update(gizmo_t *g, const camera_t *cam, float screen_w,
         g->last_x = in->mouse_x;
         g->last_y = in->mouse_y;
 
-        /* Project the cursor motion onto the axis's screen direction. */
-        float sdx = tip_x[a] - ox;
-        float sdy = tip_y[a] - oy;
-        float slen = sqrtf(sdx * sdx + sdy * sdy);
-        float pixels = (slen > 1e-3f) ? (dx * sdx + dy * sdy) / slen : 0.0f;
+        /* Only apply movement when the active tip is in front of the camera.
+           If it clips behind the near plane mid-drag, tip_x/y are
+           uninitialized — freeze until the tip re-emerges, then release. */
+        if (tip_ok[a]) {
+            float sdx = tip_x[a] - ox;
+            float sdy = tip_y[a] - oy;
+            float slen = sqrtf(sdx * sdx + sdy * sdy);
+            float pixels = (slen > 1e-3f) ? (dx * sdx + dy * sdy) / slen : 0.0f;
 
-        if (g->mode == GIZMO_MOVE) {
-            float world_per_px = (slen > 1e-3f) ? length / slen : 0.0f;
-            *pos = vec3_add(*pos,
-                            vec3_scale(AXIS_DIR[a], pixels * world_per_px));
-        } else if (g->mode == GIZMO_ROTATE) {
-            quat_t q = quat_from_axis_angle(AXIS_DIR[a], pixels * ROTATE_SENS);
-            *rot = quat_normalize(quat_mul(q, *rot));
-        } else { /* GIZMO_SCALE */
-            float s = get_component(scale, a) * (1.0f + pixels * SCALE_SENS);
-            set_component(scale, a, s < 0.02f ? 0.02f : s);
+            if (g->mode == GIZMO_MOVE) {
+                float world_per_px = (slen > 1e-3f) ? length / slen : 0.0f;
+                *pos = vec3_add(*pos,
+                                vec3_scale(AXIS_DIR[a], pixels * world_per_px));
+            } else if (g->mode == GIZMO_ROTATE) {
+                quat_t q = quat_from_axis_angle(AXIS_DIR[a], pixels * ROTATE_SENS);
+                *rot = quat_normalize(quat_mul(q, *rot));
+            } else { /* GIZMO_SCALE */
+                float s = get_component(scale, a) * (1.0f + pixels * SCALE_SENS);
+                set_component(scale, a, s < 0.02f ? 0.02f : s);
+            }
         }
 
         if (went_up) {

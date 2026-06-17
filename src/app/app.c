@@ -3,25 +3,84 @@
 #include "camera.h"
 #include "core.h"
 #include "linalg.h"
+#include "mesh.h"
+#include "obj.h"
 #include "render.h"
 #include "assets.h"
 
 #include <stdint.h>
 #include <stdlib.h>
 
-/* A small grid of cubes so the ECS-driven render path has something to chew
-   on. Each becomes one entity with a transform component. */
-static void spawn_scene(app_t *app) {
-    const int n = 3; /* (2n+1)^2 cubes */
-    for (int x = -n; x <= n; x++) {
-        for (int z = -n; z <= n; z++) {
-            entity_t e = entity_create(app->world);
-            transform_t *t =
-                entity_add_component(app->world, e, app->transform_id);
-            t->position = (vec3_t){(float)x * 1.6f, 0.0f, (float)z * 1.6f};
-            t->rotation = quat_identity();
-            t->scale = (vec3_t){0.6f, 0.6f, 0.6f};
-        }
+#define MODEL_PATH(name) KILN_ASSET_DIR "/models/" name
+
+/* Spawn an entity for an already-uploaded mesh, sized and centred so its
+   longest axis spans ~2 units and it sits at slot_x on the X axis — lets test
+   models of wildly different native scales line up comparably. */
+static void place_mesh(app_t *app, mesh_handle_t mesh, vec3_t bmin, vec3_t bmax,
+                       float slot_x) {
+    if (mesh == RENDER_MESH_INVALID) {
+        return;
+    }
+    vec3_t center = vec3_scale(vec3_add(bmin, bmax), 0.5f);
+    vec3_t extent = vec3_sub(bmax, bmin);
+    float max_dim = extent.x;
+    if (extent.y > max_dim) {
+        max_dim = extent.y;
+    }
+    if (extent.z > max_dim) {
+        max_dim = extent.z;
+    }
+    float s = (max_dim > 1e-6f) ? 2.0f / max_dim : 1.0f;
+
+    entity_t e = entity_create(app->world);
+    transform_t *t = entity_add_component(app->world, e, app->transform_id);
+    t->rotation = quat_identity();
+    t->scale = (vec3_t){s, s, s};
+    /* position = slot - s*center, so scale*v + position recentres the model. */
+    t->position =
+        (vec3_t){slot_x - s * center.x, -s * center.y, -s * center.z};
+
+    mesh_handle_t *mh = entity_add_component(app->world, e, app->mesh_id);
+    *mh = mesh;
+}
+
+static void place_cpu_mesh(app_t *app, cpu_mesh_t *m, float slot_x) {
+    vec3_t bmin, bmax;
+    if (!cpu_mesh_bounds(m, &bmin, &bmax)) {
+        return;
+    }
+    place_mesh(app, render_upload_mesh(m), bmin, bmax, slot_x);
+}
+
+static void load_model(app_t *app, const char *path, float slot_x) {
+    cpu_mesh_t m;
+    if (!obj_load(path, &m)) {
+        return;
+    }
+    place_cpu_mesh(app, &m, slot_x);
+    cpu_mesh_free(&m);
+}
+
+/* The scene: a procedural cube plus the OBJ test subjects, in a row. Requires
+   the renderer to be up (meshes are uploaded immediately). */
+static void build_scene(app_t *app) {
+    const char *models[] = {
+        MODEL_PATH("cow.obj"),    MODEL_PATH("spot.obj"),
+        MODEL_PATH("fandisk.obj"), MODEL_PATH("cheburashka.obj"),
+        MODEL_PATH("armadillo.obj"),
+    };
+    const int model_count = (int)(sizeof(models) / sizeof(models[0]));
+    const float spacing = 2.8f;
+    const int slots = model_count + 1; /* +1 for the procedural cube */
+    float x0 = -spacing * (float)(slots - 1) * 0.5f;
+
+    cpu_mesh_t cube;
+    if (cpu_mesh_cube(&cube)) {
+        place_cpu_mesh(app, &cube, x0);
+        cpu_mesh_free(&cube);
+    }
+    for (int i = 0; i < model_count; i++) {
+        load_model(app, models[i], x0 + spacing * (float)(i + 1));
     }
 }
 
@@ -32,31 +91,36 @@ bool app_init(app_t *app) {
     app->transform_id = component_register(app->world, "transform",
                                            sizeof(transform_t),
                                            _Alignof(transform_t));
-    spawn_scene(app);
-
-    camera_init(&app->camera);
+    app->mesh_id = component_register(app->world, "mesh", sizeof(mesh_handle_t),
+                                      _Alignof(mesh_handle_t));
 
     app->window = window_create("Kiln", 1280, 720);
     if (!app->window) {
         return false;
     }
-
     if (!render_init(app->window)) {
         return false;
     }
     assets_init();
 
+    build_scene(app);
+
+    camera_init(&app->camera);
+    app->camera.distance = 16.0f;
+    app->camera.pitch = kln_radians(18.0f);
+
     return true;
 }
 
-static query_iter_t transform_query(app_t *app) {
+static query_iter_t renderable_query(app_t *app) {
     signature_t require;
     signature_clear(&require);
     signature_set(&require, app->transform_id);
+    signature_set(&require, app->mesh_id);
     return query_iter(app->world, (query_desc_t){.require = require});
 }
 
-/* Aim the camera, then queue one cube per transform entity. */
+/* Aim the camera, then queue one draw per renderable entity. */
 static void render_scene(app_t *app) {
     uint32_t w, h;
     window_size(app->window, &w, &h);
@@ -65,10 +129,11 @@ static void render_scene(app_t *app) {
     render_set_camera(camera_view(&app->camera),
                       camera_proj(&app->camera, aspect));
 
-    query_iter_t it = transform_query(app);
+    query_iter_t it = renderable_query(app);
     while (query_next(&it)) {
         transform_t *t = query_get(&it, app->transform_id);
-        render_cube(mat4_from_trs(t->position, t->rotation, t->scale));
+        mesh_handle_t *mesh = query_get(&it, app->mesh_id);
+        render_mesh(*mesh, mat4_from_trs(t->position, t->rotation, t->scale));
     }
 }
 

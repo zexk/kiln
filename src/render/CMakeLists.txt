@@ -5,7 +5,7 @@ set(shader_out_dir ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${shader_out_dir})
 
 set(spv_files "")
-foreach(shader cube.vert cube.frag text.vert text.frag)
+foreach(shader mesh.vert mesh.frag text.vert text.frag)
   add_custom_command(
     OUTPUT ${shader_out_dir}/${shader}.spv
     COMMAND ${GLSLC} ${shader_src_dir}/${shader} -o ${shader_out_dir}/${shader}.spv

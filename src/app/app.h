@@ -5,6 +5,7 @@
 #include "camera.h"
 #include "linalg.h"
 #include "platform.h"
+#include "render.h"
 #include "ecs.h"
 
 /* World-space placement of an entity. The only component for now; lives here
@@ -21,6 +22,7 @@ typedef struct {
     window_t *window;
     world_t *world;
     component_id_t transform_id;
+    component_id_t mesh_id; /* stores a mesh_handle_t */
     camera_t camera;
 } app_t;
 

@@ -9,3 +9,6 @@ result-*
 # Editor / OS
 *.swp
 .DS_Store
+
+# Downloaded test meshes (fetch with assets/models/fetch.sh)
+assets/models/*.obj

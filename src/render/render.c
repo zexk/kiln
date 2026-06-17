@@ -4,6 +4,7 @@
 
 #include "render.h"
 #include "linalg.h"
+#include "mesh.h"
 #include "font8x8.h"
 
 #include <stdio.h>
@@ -15,8 +16,9 @@
 /* Debug-text vertex budget per frame (each lit font pixel costs 6 verts). */
 #define MAX_TEXT_VERTS (64 * 1024)
 
-/* Per-frame cube instance budget; each costs one indexed draw + push constant. */
-#define MAX_CUBES 4096
+/* Resident GPU meshes and per-frame draw instances. */
+#define MAX_MESHES 256
+#define MAX_INSTANCES 4096
 
 #define VK_CHECK(x)                                                         \
     do {                                                                    \
@@ -29,35 +31,32 @@
     } while (0)
 
 typedef struct {
-    float pos[3];
-    float color[3];
-} vertex_t;
-
-typedef struct {
     float pos[2]; /* screen pixels */
     float color[3];
 } text_vertex_t;
 
-/* Unit cube centred on the origin; vertex colour derived from corner. */
-static const vertex_t k_cube_vertices[] = {
-    {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, 0.0f}},
-    {{0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, -0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{0.5f, -0.5f, 0.5f}, {1.0f, 0.0f, 1.0f}},
-    {{0.5f, 0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
-    {{-0.5f, 0.5f, 0.5f}, {0.0f, 1.0f, 1.0f}},
-};
+/* A GPU-resident indexed mesh. */
+typedef struct {
+    VkBuffer vertex_buffer;
+    VkDeviceMemory vertex_memory;
+    VkBuffer index_buffer;
+    VkDeviceMemory index_memory;
+    uint32_t index_count;
+} gpu_mesh_t;
 
-static const uint16_t k_cube_indices[] = {
-    0, 1, 2, 2, 3, 0, /* -Z */
-    4, 5, 6, 6, 7, 4, /* +Z */
-    0, 3, 7, 7, 4, 0, /* -X */
-    1, 2, 6, 6, 5, 1, /* +X */
-    0, 1, 5, 5, 4, 0, /* -Y */
-    3, 2, 6, 6, 7, 3, /* +Y */
-};
+/* One queued draw: which mesh, plus the matrices the shader needs. */
+typedef struct {
+    mesh_handle_t mesh;
+    mat4_t mvp;   /* proj * view * model, for clip-space position */
+    mat4_t model; /* for transforming the normal into world space */
+} mesh_instance_t;
+
+/* Vertex-stage push constants for the mesh pipeline (128 bytes = the minimum
+   guaranteed maxPushConstantsSize, so this stays portable). */
+typedef struct {
+    mat4_t mvp;
+    mat4_t model;
+} mesh_push_t;
 
 static struct {
     window_t *window;
@@ -94,10 +93,14 @@ static struct {
     VkFence in_flight[MAX_FRAMES_IN_FLIGHT];
     uint32_t frame;
 
-    VkBuffer vertex_buffer;
-    VkDeviceMemory vertex_memory;
-    VkBuffer index_buffer;
-    VkDeviceMemory index_memory;
+    gpu_mesh_t meshes[MAX_MESHES];
+    uint32_t mesh_count;
+
+    /* Mesh draws queued this frame; drained in record_command_buffer. */
+    mat4_t view;
+    mat4_t proj;
+    mesh_instance_t *instances; /* capacity MAX_INSTANCES */
+    uint32_t instance_count;
 
     /* Debug text: a screen-space 2D pipeline with per-frame-in-flight vertex
        buffers (persistently mapped) fed from a CPU staging array. */
@@ -108,13 +111,6 @@ static struct {
     void *text_mapped[MAX_FRAMES_IN_FLIGHT];
     text_vertex_t *text_verts; /* CPU staging, capacity MAX_TEXT_VERTS */
     uint32_t text_vert_count;
-
-    /* Cube instances queued this frame; drained in record_command_buffer. The
-       camera's view*proj is baked into each instance's mvp at queue time. */
-    mat4_t view;
-    mat4_t proj;
-    mat4_t *cube_mvps; /* capacity MAX_CUBES */
-    uint32_t cube_count;
 } g;
 
 /* ----------------------------------------------------------------------- */
@@ -575,8 +571,8 @@ static bool create_depth_resources(void) {
 
 static bool create_pipeline(void) {
     VkShaderModule vert, frag;
-    if (!create_shader_module("cube.vert", &vert) ||
-        !create_shader_module("cube.frag", &frag)) {
+    if (!create_shader_module("mesh.vert", &vert) ||
+        !create_shader_module("mesh.frag", &frag)) {
         return false;
     }
 
@@ -592,18 +588,18 @@ static bool create_pipeline(void) {
 
     VkVertexInputBindingDescription binding = {0};
     binding.binding = 0;
-    binding.stride = sizeof(vertex_t);
+    binding.stride = sizeof(mesh_vertex_t);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
     VkVertexInputAttributeDescription attrs[2] = {0};
     attrs[0].location = 0;
     attrs[0].binding = 0;
     attrs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attrs[0].offset = offsetof(vertex_t, pos);
+    attrs[0].offset = offsetof(mesh_vertex_t, position);
     attrs[1].location = 1;
     attrs[1].binding = 0;
     attrs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attrs[1].offset = offsetof(vertex_t, color);
+    attrs[1].offset = offsetof(mesh_vertex_t, normal);
 
     VkPipelineVertexInputStateCreateInfo vertex_input = {0};
     vertex_input.sType =
@@ -664,7 +660,7 @@ static bool create_pipeline(void) {
     VkPushConstantRange push = {0};
     push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     push.offset = 0;
-    push.size = sizeof(mat4_t);
+    push.size = sizeof(mesh_push_t);
 
     VkPipelineLayoutCreateInfo layout = {0};
     layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -985,12 +981,14 @@ void render_set_camera(mat4_t view, mat4_t proj) {
     g.proj = proj;
 }
 
-void render_cube(mat4_t model) {
-    if (g.cube_count >= MAX_CUBES) {
+void render_mesh(mesh_handle_t mesh, mat4_t model) {
+    if (g.instance_count >= MAX_INSTANCES || mesh >= g.mesh_count) {
         return;
     }
-    /* Bake the full mvp now so recording is a flat memcpy-and-draw loop. */
-    g.cube_mvps[g.cube_count++] = mat4_mul(g.proj, mat4_mul(g.view, model));
+    mesh_instance_t *inst = &g.instances[g.instance_count++];
+    inst->mesh = mesh;
+    inst->mvp = mat4_mul(g.proj, mat4_mul(g.view, model));
+    inst->model = model;
 }
 
 static void push_text_vertex(float x, float y, float r, float gr, float b) {
@@ -1043,7 +1041,8 @@ void render_text(float x, float y, float scale, float r, float gr, float b,
 }
 
 static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
-                                  uint32_t cube_count, uint32_t text_verts) {
+                                  uint32_t instance_count,
+                                  uint32_t text_verts) {
     VkCommandBufferBeginInfo begin = {0};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &begin);
@@ -1106,15 +1105,18 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipeline);
 
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &g.vertex_buffer, &offset);
-    vkCmdBindIndexBuffer(cmd, g.index_buffer, 0, VK_INDEX_TYPE_UINT16);
+    for (uint32_t i = 0; i < instance_count; i++) {
+        const mesh_instance_t *inst = &g.instances[i];
+        const gpu_mesh_t *mesh = &g.meshes[inst->mesh];
 
-    uint32_t index_count = sizeof(k_cube_indices) / sizeof(k_cube_indices[0]);
-    for (uint32_t i = 0; i < cube_count; i++) {
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertex_buffer, &offset);
+        vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+
+        mesh_push_t push = {inst->mvp, inst->model};
         vkCmdPushConstants(cmd, g.pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                           sizeof(mat4_t), &g.cube_mvps[i]);
-        vkCmdDrawIndexed(cmd, index_count, 1, 0, 0, 0);
+                           sizeof(push), &push);
+        vkCmdDrawIndexed(cmd, mesh->index_count, 1, 0, 0, 0);
     }
 
     /* Debug text overlay: a positive-height viewport (top-left origin, +y
@@ -1170,28 +1172,46 @@ bool render_init(window_t *window) {
         return false;
     }
 
-    if (!create_filled_buffer(k_cube_vertices, sizeof(k_cube_vertices),
-                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                              &g.vertex_buffer, &g.vertex_memory) ||
-        !create_filled_buffer(k_cube_indices, sizeof(k_cube_indices),
-                              VK_BUFFER_USAGE_INDEX_BUFFER_BIT, &g.index_buffer,
-                              &g.index_memory) ||
-        !create_text_buffers()) {
+    if (!create_text_buffers()) {
         return false;
     }
 
-    g.cube_mvps = malloc(sizeof(mat4_t) * MAX_CUBES);
-    if (!g.cube_mvps) {
+    g.instances = malloc(sizeof(mesh_instance_t) * MAX_INSTANCES);
+    if (!g.instances) {
         return false;
     }
     return true;
 }
 
+mesh_handle_t render_upload_mesh(const cpu_mesh_t *mesh) {
+    if (g.mesh_count >= MAX_MESHES || mesh->vertex_count == 0 ||
+        mesh->index_count == 0) {
+        fprintf(stderr, "[render] mesh upload rejected\n");
+        return RENDER_MESH_INVALID;
+    }
+
+    gpu_mesh_t gm = {0};
+    gm.index_count = mesh->index_count;
+    if (!create_filled_buffer(mesh->vertices,
+                              sizeof(mesh_vertex_t) * mesh->vertex_count,
+                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                              &gm.vertex_buffer, &gm.vertex_memory) ||
+        !create_filled_buffer(mesh->indices,
+                              sizeof(uint32_t) * mesh->index_count,
+                              VK_BUFFER_USAGE_INDEX_BUFFER_BIT, &gm.index_buffer,
+                              &gm.index_memory)) {
+        return RENDER_MESH_INVALID;
+    }
+
+    g.meshes[g.mesh_count] = gm;
+    return g.mesh_count++;
+}
+
 void render_draw(void) {
     /* Snapshot and clear the queues up front so they never accumulate across
        an early-return frame (e.g. resize). */
-    uint32_t cube_count = g.cube_count;
-    g.cube_count = 0;
+    uint32_t instance_count = g.instance_count;
+    g.instance_count = 0;
     uint32_t text_verts = g.text_vert_count;
     g.text_vert_count = 0;
 
@@ -1226,7 +1246,7 @@ void render_draw(void) {
 
     VkCommandBuffer cmd = g.command_buffers[g.frame];
     vkResetCommandBuffer(cmd, 0);
-    record_command_buffer(cmd, image_index, cube_count, text_verts);
+    record_command_buffer(cmd, image_index, instance_count, text_verts);
 
     VkPipelineStageFlags wait_stage =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1264,17 +1284,19 @@ void render_shutdown(void) {
     }
     vkDeviceWaitIdle(g.device);
 
-    vkDestroyBuffer(g.device, g.index_buffer, NULL);
-    vkFreeMemory(g.device, g.index_memory, NULL);
-    vkDestroyBuffer(g.device, g.vertex_buffer, NULL);
-    vkFreeMemory(g.device, g.vertex_memory, NULL);
+    for (uint32_t i = 0; i < g.mesh_count; i++) {
+        vkDestroyBuffer(g.device, g.meshes[i].index_buffer, NULL);
+        vkFreeMemory(g.device, g.meshes[i].index_memory, NULL);
+        vkDestroyBuffer(g.device, g.meshes[i].vertex_buffer, NULL);
+        vkFreeMemory(g.device, g.meshes[i].vertex_memory, NULL);
+    }
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroyBuffer(g.device, g.text_buffer[i], NULL);
         vkFreeMemory(g.device, g.text_memory[i], NULL);
     }
     free(g.text_verts);
-    free(g.cube_mvps);
+    free(g.instances);
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(g.device, g.image_available[i], NULL);

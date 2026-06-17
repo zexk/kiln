@@ -160,3 +160,37 @@ Test(ecs, query_iteration) {
 
     world_destroy(world);
 }
+
+Test(ecs, query_exclude_filter) {
+    world_t *world = world_create();
+    component_id_t pos_id = component_register(world, "position", sizeof(position_t), __alignof__(position_t));
+    component_id_t vel_id = component_register(world, "velocity", sizeof(velocity_t), __alignof__(velocity_t));
+
+    entity_t a = entity_create(world); /* position only — must match */
+    *(position_t *)entity_add_component(world, a, pos_id) = (position_t){ 1, 0, 0 };
+
+    entity_t b = entity_create(world); /* position + velocity — excluded */
+    *(position_t *)entity_add_component(world, b, pos_id) = (position_t){ 2, 0, 0 };
+    *(velocity_t *)entity_add_component(world, b, vel_id) = (velocity_t){ 0, 0, 0 };
+
+    entity_t c = entity_create(world); /* velocity only — not required, also excluded */
+    *(velocity_t *)entity_add_component(world, c, vel_id) = (velocity_t){ 0, 0, 0 };
+
+    signature_t require, exclude;
+    signature_clear(&require);
+    signature_set(&require, pos_id);
+    signature_clear(&exclude);
+    signature_set(&exclude, vel_id);
+
+    query_iter_t it = query_iter(world, (query_desc_t){ .require = require, .exclude = exclude });
+
+    int seen = 0;
+    while (query_next(&it)) {
+        position_t *p = query_get(&it, pos_id);
+        cr_assert(ieee_ulp_eq(flt, p->x, 1.0f, 4));
+        seen++;
+    }
+    cr_assert(eq(int, seen, 1)); /* only a; b excluded by velocity, c lacks position */
+
+    world_destroy(world);
+}

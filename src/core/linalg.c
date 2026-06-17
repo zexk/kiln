@@ -282,6 +282,19 @@ mat4_t mat4_from_quat(quat_t q) {
     return r;
 }
 
+mat4_t mat4_from_trs(vec3_t translation, quat_t rotation, vec3_t scale) {
+    /* Build R, scale its basis columns, then drop translation in directly —
+       cheaper and tidier than two full mat4_mul of T*R*S. */
+    mat4_t r = mat4_from_quat(rotation);
+    r.m[0] *= scale.x; r.m[1] *= scale.x; r.m[2] *= scale.x;
+    r.m[4] *= scale.y; r.m[5] *= scale.y; r.m[6] *= scale.y;
+    r.m[8] *= scale.z; r.m[9] *= scale.z; r.m[10] *= scale.z;
+    r.m[12] = translation.x;
+    r.m[13] = translation.y;
+    r.m[14] = translation.z;
+    return r;
+}
+
 mat4_t mat4_perspective(float fovy, float aspect, float near, float far) {
     float f = 1.0f / tanf(fovy * 0.5f);
     mat4_t r = {{0}};

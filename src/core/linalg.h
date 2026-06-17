@@ -95,6 +95,8 @@ mat4_t mat4_inverse(mat4_t a);
 mat4_t mat4_translation(vec3_t t);
 mat4_t mat4_scaling(vec3_t s);
 mat4_t mat4_from_quat(quat_t q);
+/* Compose translation * rotation * scale into one model matrix. */
+mat4_t mat4_from_trs(vec3_t translation, quat_t rotation, vec3_t scale);
 
 /* Right-handed perspective, vertical FOV in radians, depth in [0, 1].
    See the Y-FLIP CONTRACT above. */

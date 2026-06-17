@@ -9,12 +9,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #define MAX_FRAMES_IN_FLIGHT 2
 
 /* Debug-text vertex budget per frame (each lit font pixel costs 6 verts). */
 #define MAX_TEXT_VERTS (64 * 1024)
+
+/* Per-frame cube instance budget; each costs one indexed draw + push constant. */
+#define MAX_CUBES 4096
 
 #define VK_CHECK(x)                                                         \
     do {                                                                    \
@@ -107,7 +109,12 @@ static struct {
     text_vertex_t *text_verts; /* CPU staging, capacity MAX_TEXT_VERTS */
     uint32_t text_vert_count;
 
-    struct timespec start_time;
+    /* Cube instances queued this frame; drained in record_command_buffer. The
+       camera's view*proj is baked into each instance's mvp at queue time. */
+    mat4_t view;
+    mat4_t proj;
+    mat4_t *cube_mvps; /* capacity MAX_CUBES */
+    uint32_t cube_count;
 } g;
 
 /* ----------------------------------------------------------------------- */
@@ -973,20 +980,17 @@ static void image_barrier(VkCommandBuffer cmd, VkImage image,
                          &barrier);
 }
 
-static mat4_t compute_mvp(void) {
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    float t = (float)(now.tv_sec - g.start_time.tv_sec) +
-              (float)(now.tv_nsec - g.start_time.tv_nsec) * 1e-9f;
+void render_set_camera(mat4_t view, mat4_t proj) {
+    g.view = view;
+    g.proj = proj;
+}
 
-    quat_t spin = quat_mul(quat_from_axis_angle((vec3_t){0, 1, 0}, t),
-                           quat_from_axis_angle((vec3_t){1, 0, 0}, t * 0.5f));
-    mat4_t model = mat4_from_quat(spin);
-    mat4_t view = mat4_look_at((vec3_t){0, 0, 3.5f}, (vec3_t){0, 0, 0},
-                               (vec3_t){0, 1, 0});
-    float aspect = (float)g.extent.width / (float)g.extent.height;
-    mat4_t proj = mat4_perspective(kln_radians(60.0f), aspect, 0.1f, 100.0f);
-    return mat4_mul(proj, mat4_mul(view, model));
+void render_cube(mat4_t model) {
+    if (g.cube_count >= MAX_CUBES) {
+        return;
+    }
+    /* Bake the full mvp now so recording is a flat memcpy-and-draw loop. */
+    g.cube_mvps[g.cube_count++] = mat4_mul(g.proj, mat4_mul(g.view, model));
 }
 
 static void push_text_vertex(float x, float y, float r, float gr, float b) {
@@ -1039,7 +1043,7 @@ void render_text(float x, float y, float scale, float r, float gr, float b,
 }
 
 static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
-                                  uint32_t text_verts) {
+                                  uint32_t cube_count, uint32_t text_verts) {
     VkCommandBufferBeginInfo begin = {0};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &begin);
@@ -1106,12 +1110,12 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     vkCmdBindVertexBuffers(cmd, 0, 1, &g.vertex_buffer, &offset);
     vkCmdBindIndexBuffer(cmd, g.index_buffer, 0, VK_INDEX_TYPE_UINT16);
 
-    mat4_t mvp = compute_mvp();
-    vkCmdPushConstants(cmd, g.pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                       sizeof(mat4_t), &mvp);
-
-    vkCmdDrawIndexed(cmd, sizeof(k_cube_indices) / sizeof(k_cube_indices[0]), 1,
-                     0, 0, 0);
+    uint32_t index_count = sizeof(k_cube_indices) / sizeof(k_cube_indices[0]);
+    for (uint32_t i = 0; i < cube_count; i++) {
+        vkCmdPushConstants(cmd, g.pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                           sizeof(mat4_t), &g.cube_mvps[i]);
+        vkCmdDrawIndexed(cmd, index_count, 1, 0, 0, 0);
+    }
 
     /* Debug text overlay: a positive-height viewport (top-left origin, +y
        down) so it draws upright regardless of the cube's flipped viewport. */
@@ -1156,7 +1160,8 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
 bool render_init(window_t *window) {
     memset(&g, 0, sizeof(g));
     g.window = window;
-    clock_gettime(CLOCK_MONOTONIC, &g.start_time);
+    g.view = mat4_identity();
+    g.proj = mat4_identity();
 
     if (!create_instance() || !create_surface() || !pick_physical_device() ||
         !create_device() || !create_swapchain() || !create_depth_resources() ||
@@ -1174,12 +1179,19 @@ bool render_init(window_t *window) {
         !create_text_buffers()) {
         return false;
     }
+
+    g.cube_mvps = malloc(sizeof(mat4_t) * MAX_CUBES);
+    if (!g.cube_mvps) {
+        return false;
+    }
     return true;
 }
 
 void render_draw(void) {
-    /* Snapshot and clear the text queue up front so it never accumulates
-       across an early-return frame (e.g. resize). */
+    /* Snapshot and clear the queues up front so they never accumulate across
+       an early-return frame (e.g. resize). */
+    uint32_t cube_count = g.cube_count;
+    g.cube_count = 0;
     uint32_t text_verts = g.text_vert_count;
     g.text_vert_count = 0;
 
@@ -1214,7 +1226,7 @@ void render_draw(void) {
 
     VkCommandBuffer cmd = g.command_buffers[g.frame];
     vkResetCommandBuffer(cmd, 0);
-    record_command_buffer(cmd, image_index, text_verts);
+    record_command_buffer(cmd, image_index, cube_count, text_verts);
 
     VkPipelineStageFlags wait_stage =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1262,6 +1274,7 @@ void render_shutdown(void) {
         vkFreeMemory(g.device, g.text_memory[i], NULL);
     }
     free(g.text_verts);
+    free(g.cube_mvps);
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(g.device, g.image_available[i], NULL);

@@ -130,3 +130,27 @@ Test(math, slerp_hits_endpoints) {
     cr_assert(vec3_approx(quat_rotate_vec3(quat_slerp(a, b, 1.0f), v),
                           quat_rotate_vec3(b, v)));
 }
+
+/* --- mat4_from_trs: verify the optimised fast path against naive T*R*S --- */
+
+static bool mat4_approx(mat4_t a, mat4_t b) {
+    for (int i = 0; i < 16; i++) {
+        float d = a.m[i] - b.m[i];
+        if ((d < 0.0f ? -d : d) >= EPS) {
+            return false;
+        }
+    }
+    return true;
+}
+
+Test(math, mat4_from_trs_matches_naive_composition) {
+    vec3_t t = {3.0f, -1.0f, 2.0f};
+    quat_t r = quat_from_axis_angle((vec3_t){1.0f, 1.0f, 0.0f}, kln_radians(40.0f));
+    vec3_t s = {2.0f, 0.5f, 1.5f};
+
+    mat4_t fast = mat4_from_trs(t, r, s);
+    mat4_t naive = mat4_mul(mat4_translation(t),
+                            mat4_mul(mat4_from_quat(r), mat4_scaling(s)));
+
+    cr_assert(mat4_approx(fast, naive));
+}

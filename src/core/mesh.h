@@ -38,6 +38,6 @@ bool cpu_mesh_bounds(const cpu_mesh_t *mesh, vec3_t *out_min, vec3_t *out_max);
    that was removed (zero for an empty mesh). */
 vec3_t cpu_mesh_recenter(cpu_mesh_t *mesh);
 
-/* Generate a unit cube centred on the origin with smooth (well, per-corner)
-   normals — a dependency-free baseline mesh that always renders. */
+/* Generate a unit cube centred on the origin with per-face flat normals and
+   box-mapped UVs — a dependency-free baseline mesh that always renders. */
 bool cpu_mesh_cube(cpu_mesh_t *out);

@@ -1,6 +1,7 @@
 #include "mesh.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 void cpu_mesh_free(cpu_mesh_t *mesh) {
     if (!mesh) {
@@ -78,35 +79,36 @@ vec3_t cpu_mesh_recenter(cpu_mesh_t *mesh) {
 }
 
 bool cpu_mesh_cube(cpu_mesh_t *out) {
-    static const vec3_t pos[8] = {
-        {-0.5f, -0.5f, -0.5f}, {0.5f, -0.5f, -0.5f}, {0.5f, 0.5f, -0.5f},
-        {-0.5f, 0.5f, -0.5f},  {-0.5f, -0.5f, 0.5f}, {0.5f, -0.5f, 0.5f},
-        {0.5f, 0.5f, 0.5f},    {-0.5f, 0.5f, 0.5f},
+    /* 4 vertices per face × 6 faces: each vertex carries its face's exact
+       normal, giving flat shading instead of rounded corner-averaged normals. */
+    static const mesh_vertex_t verts[24] = {
+        /* -Z */ {{ 0.5f,-0.5f,-0.5f},{0,0,-1},{0,1}}, {{-0.5f,-0.5f,-0.5f},{0,0,-1},{1,1}},
+                 {{-0.5f, 0.5f,-0.5f},{0,0,-1},{1,0}}, {{ 0.5f, 0.5f,-0.5f},{0,0,-1},{0,0}},
+        /* +Z */ {{-0.5f,-0.5f, 0.5f},{0,0,1}, {0,1}}, {{ 0.5f,-0.5f, 0.5f},{0,0,1}, {1,1}},
+                 {{ 0.5f, 0.5f, 0.5f},{0,0,1}, {1,0}}, {{-0.5f, 0.5f, 0.5f},{0,0,1}, {0,0}},
+        /* -X */ {{-0.5f,-0.5f,-0.5f},{-1,0,0},{0,1}}, {{-0.5f,-0.5f, 0.5f},{-1,0,0},{1,1}},
+                 {{-0.5f, 0.5f, 0.5f},{-1,0,0},{1,0}}, {{-0.5f, 0.5f,-0.5f},{-1,0,0},{0,0}},
+        /* +X */ {{ 0.5f,-0.5f, 0.5f},{1,0,0}, {0,1}}, {{ 0.5f,-0.5f,-0.5f},{1,0,0}, {1,1}},
+                 {{ 0.5f, 0.5f,-0.5f},{1,0,0}, {1,0}}, {{ 0.5f, 0.5f, 0.5f},{1,0,0}, {0,0}},
+        /* -Y */ {{-0.5f,-0.5f,-0.5f},{0,-1,0},{0,1}}, {{ 0.5f,-0.5f,-0.5f},{0,-1,0},{1,1}},
+                 {{ 0.5f,-0.5f, 0.5f},{0,-1,0},{1,0}}, {{-0.5f,-0.5f, 0.5f},{0,-1,0},{0,0}},
+        /* +Y */ {{-0.5f, 0.5f, 0.5f},{0,1,0}, {0,1}}, {{ 0.5f, 0.5f, 0.5f},{0,1,0}, {1,1}},
+                 {{ 0.5f, 0.5f,-0.5f},{0,1,0}, {1,0}}, {{-0.5f, 0.5f,-0.5f},{0,1,0}, {0,0}},
     };
     static const uint32_t idx[36] = {
-        0, 1, 2, 2, 3, 0, /* -Z */
-        5, 4, 7, 7, 6, 5, /* +Z */
-        4, 0, 3, 3, 7, 4, /* -X */
-        1, 5, 6, 6, 2, 1, /* +X */
-        4, 5, 1, 1, 0, 4, /* -Y */
-        3, 2, 6, 6, 7, 3, /* +Y */
+         0, 1, 2,  2, 3, 0,   4, 5, 6,  6, 7, 4,
+         8, 9,10, 10,11, 8,  12,13,14, 14,15,12,
+        16,17,18, 18,19,16,  20,21,22, 22,23,20,
     };
-
-    out->vertices = malloc(sizeof(mesh_vertex_t) * 8);
-    out->indices = malloc(sizeof(uint32_t) * 36);
+    out->vertices = malloc(sizeof(verts));
+    out->indices = malloc(sizeof(idx));
     if (!out->vertices || !out->indices) {
         cpu_mesh_free(out);
         return false;
     }
-    out->vertex_count = 8;
+    memcpy(out->vertices, verts, sizeof(verts));
+    memcpy(out->indices, idx, sizeof(idx));
+    out->vertex_count = 24;
     out->index_count = 36;
-    for (uint32_t i = 0; i < 8; i++) {
-        out->vertices[i].position = pos[i];
-        out->vertices[i].uv = (vec2_t){0.0f, 0.0f}; /* untextured */
-    }
-    for (uint32_t i = 0; i < 36; i++) {
-        out->indices[i] = idx[i];
-    }
-    cpu_mesh_compute_normals(out);
     return true;
 }

@@ -5,35 +5,28 @@ layout(location = 0) out vec4 FragColor;
 layout(location = 0) in vec3 ourColor;
 layout(location = 1) in vec3 Normal;
 layout(location = 2) in float AO;
-layout(location = 3) in vec2 TexCoord;
+layout(location = 3) in vec3 TexCoord;   /* xy = uv, z = array layer */
 layout(location = 4) in vec3 view_pos;
 
-layout(set = 0, binding = 0) uniform sampler2D uTexture;
+layout(set = 0, binding = 0) uniform sampler2DArray uTexture;
 
 layout(push_constant) uniform PushConstants {
-    layout(offset = 192) vec3 uFogColor;
+    layout(offset = 192) vec3  uFogColor;
     layout(offset = 204) float uFogDensity;
 } pc;
 
 void main() {
-    // Simple directional lighting
     vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
-    float diff = max(dot(Normal, lightDir), 0.0);
-    
-    float ambient = 0.3;
-    float light = min(ambient + diff, 1.0);
-    
-    // Sample texture and combine with lighting and AO
+    float diff    = max(dot(Normal, lightDir), 0.0);
+    float light   = min(0.3 + diff, 1.0);
+
     vec4 texColor = texture(uTexture, TexCoord);
-    
-    // Apply AO and lighting to the texture
+
     vec3 lit_color = texColor.rgb * light * AO;
-    
-    // Distance fog
+
     float dist = length(view_pos);
-    float fog = exp(-dist * pc.uFogDensity);
-    fog = clamp(fog, 0.0, 1.0);
+    float fog  = clamp(exp(-dist * pc.uFogDensity), 0.0, 1.0);
     vec3 result = mix(pc.uFogColor, lit_color, fog);
-    
+
     FragColor = vec4(result, 1.0);
 }

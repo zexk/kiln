@@ -32,6 +32,8 @@ if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 
+add_subdirectory(game)
+
 # Install baked assets only: .obj source files are excluded from the shipped
 # tree — only .kmesh binaries (produced by kiln-bake) are installed.
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets DESTINATION share/kiln

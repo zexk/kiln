@@ -2,13 +2,24 @@
 
 #include <stdbool.h>
 
-/* A tiny immediate-mode debug UI, drawn through the renderer's 2D overlay
-   primitives (render_rect/render_text). One context per frame: feed input to
-   ui_begin, emit a panel of widgets, ui_end, then read ui_wants_mouse to decide
-   whether the camera should ignore the mouse this frame.
+/* A tiny immediate-mode debug UI.  Rendering is fully backend-agnostic:
+   callers supply a ui_draw_t vtable at ui_begin time that routes rect and text
+   primitives to whatever renderer is in use (render.h for the editor,
+   renderer.h for the game, etc.).
 
-   The UI is render- and ECS-agnostic: callers pass plain pointers to the values
-   being tampered with, and widgets mutate them in place. */
+   One context per frame: feed input + draw vtable to ui_begin, emit a panel of
+   widgets, ui_end, then read ui_wants_mouse to decide whether the camera should
+   ignore the mouse this frame.  Widgets mutate plain pointers in place. */
+
+/* Drawing backend: two primitives are enough for all widgets.
+   `ud` is the userdata pointer stored in ui_draw_t; pass NULL if unused. */
+typedef struct {
+    void (*rect)(void *ud, float x, float y, float w, float h,
+                 float r, float g, float b);
+    void (*text)(void *ud, float x, float y, float scale,
+                 float r, float g, float b, const char *s);
+    void *userdata;
+} ui_draw_t;
 
 typedef struct {
     float mouse_x; /* screen pixels, top-left origin */
@@ -41,10 +52,13 @@ typedef struct {
     float cursor_y;
 
     float panel_height[UI_MAX_PANELS]; /* cached so the bg can be drawn first */
+
+    ui_draw_t draw; /* set by ui_begin each frame */
 } ui_t;
 
 void ui_init(ui_t *ui);
-void ui_begin(ui_t *ui, const ui_input_t *in, float screen_w, float screen_h);
+void ui_begin(ui_t *ui, const ui_input_t *in, float screen_w, float screen_h,
+              const ui_draw_t *draw);
 void ui_end(ui_t *ui);
 
 /* True if the UI consumed the mouse this frame (pointer over a panel, or a

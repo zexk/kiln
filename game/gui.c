@@ -104,6 +104,10 @@ void gui_init(Gui *gui, R_Program program) {
     renderer_bind_vao(R_INVALID_HANDLE);
 }
 
+void gui_rect(Gui *gui, float x, float y, float w, float h, float r, float g, float b) {
+    gui_fill_rect(gui, x, y, w, h, r, g, b, 1.0f);
+}
+
 void gui_shutdown(Gui *gui) {
     if (gui->vbo != R_INVALID_HANDLE) renderer_destroy_buffer(gui->vbo);
     if (gui->vao != R_INVALID_HANDLE) renderer_destroy_vao(gui->vao);

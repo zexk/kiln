@@ -570,6 +570,16 @@ static void scene_do_load(app_t *app) {
              spawned);
 }
 
+static void app_ui_rect(void *ud, float x, float y, float w, float h,
+                        float r, float g, float b) {
+    (void)ud; render_rect(x, y, w, h, r, g, b);
+}
+static void app_ui_text(void *ud, float x, float y, float scale,
+                        float r, float g, float b, const char *s) {
+    (void)ud; render_text(x, y, scale, r, g, b, s);
+}
+static const ui_draw_t g_kln_ui_draw = {app_ui_rect, app_ui_text, NULL};
+
 /* Build the diagnostics / tamper panel and record whether it owns the mouse. */
 static void build_ui(app_t *app) {
     uint32_t w, h;
@@ -584,7 +594,7 @@ static void build_ui(app_t *app) {
         .pointer_valid = !camera_is_navigating(&app->camera),
     };
 
-    ui_begin(&app->ui, &in, (float)w, (float)h);
+    ui_begin(&app->ui, &in, (float)w, (float)h, &g_kln_ui_draw);
     ui_panel_begin(&app->ui, 12.0f, 12.0f, 300.0f);
 
     ui_text(&app->ui, "KILN  %.0f FPS  %.2f MS", (double)app->fps,

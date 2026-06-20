@@ -6,6 +6,7 @@
 #include "math3d.h"
 #include "logger.h"
 #include "game_input.h"
+#include "ui.h"
 #include "voxel.h"
 #include "mesh.h"
 #include "camera.h"
@@ -28,6 +29,19 @@
 #define FOV_DEGREES         45.0f
 #define NEAR_PLANE          0.1f
 #define FAR_PLANE           100.0f
+
+/* ── Game-side ui_draw_t: routes to gui.c's renderer.h primitives ─────────── */
+
+static Gui *s_ui_gui; /* set once after gui_init, before first ui_begin */
+
+static void game_ui_rect(void *ud, float x, float y, float w, float h,
+                          float r, float g, float b) {
+    gui_rect((Gui *)ud, x, y, w, h, r, g, b);
+}
+static void game_ui_text(void *ud, float x, float y, float scale,
+                          float r, float g, float b, const char *s) {
+    gui_write_text((Gui *)ud, x, y, s, scale, r, g, b);
+}
 
 static void quit_button_callback(void *userdata) {
     bool *running = userdata;
@@ -215,6 +229,11 @@ int main(void) {
 
     Gui gui;
     gui_init(&gui, hud_program);
+    s_ui_gui = &gui;
+
+    ui_t debug_ui;
+    ui_init(&debug_ui);
+    const ui_draw_t game_draw = {game_ui_rect, game_ui_text, &gui};
 
     World world;
     world_init(&world, 2);
@@ -249,6 +268,10 @@ int main(void) {
     double last_save_flush = 0.0;
     bool   running         = true;
     bool   paused          = false;
+    bool   show_debug      = false;
+    float  fps             = 0.0f;
+    double fps_acc         = 0.0;
+    int    fps_frames      = 0;
     uint32_t win_width  = WINDOW_WIDTH;
     uint32_t win_height = WINDOW_HEIGHT;
     window_size(win, &win_width, &win_height);
@@ -261,6 +284,9 @@ int main(void) {
         double dt  = now - last_time;
         last_time  = now;
 
+        fps_acc += dt; fps_frames++;
+        if (fps_acc >= 0.5) { fps = (float)(fps_frames / fps_acc); fps_acc = 0; fps_frames = 0; }
+
         event_t event;
         while (window_poll_event(win, &event)) {
             game_input_handle_event(&game_input, &event);
@@ -271,6 +297,7 @@ int main(void) {
                     paused = !paused;
                     window_set_cursor_mode(win, paused ? CURSOR_NORMAL : CURSOR_DISABLED);
                 }
+                if (event.key.keysym == 0xFFC0) /* F3 */ show_debug = !show_debug;
                 break;
             case EVENT_SCROLL:
                 if (!paused && event.scroll.delta != 0.0f) {
@@ -454,6 +481,37 @@ int main(void) {
             renderer_use_program(R_INVALID_HANDLE);
             renderer_enable(R_CAP_DEPTH_TEST);
             renderer_enable(R_CAP_CULL_FACE);
+        }
+
+        /* Debug panel (F3) */
+        if (show_debug) {
+            renderer_disable(R_CAP_DEPTH_TEST);
+            renderer_enable(R_CAP_BLEND);
+            renderer_blend_func(R_BLEND_SRC_ALPHA, R_BLEND_ONE_MINUS_SRC_ALPHA);
+            renderer_use_program(hud_program);
+
+            int active_chunks = 0;
+            for (int i = 0; i < world.capacity; i++) if (world.chunks[i].active) active_chunks++;
+
+            ui_input_t ui_in = {
+                .mouse_x     = game_input.mouse_x,
+                .mouse_y     = game_input.mouse_y,
+                .mouse_down  = game_input.mouse_left,
+                .pointer_valid = paused, /* only interactive when paused */
+            };
+            ui_begin(&debug_ui, &ui_in, (float)win_width, (float)win_height, &game_draw);
+            ui_panel_begin(&debug_ui, 10.0f, 10.0f, 240.0f);
+            ui_text(&debug_ui, "%.0f FPS", (double)fps);
+            ui_text(&debug_ui, "POS  %.1f %.1f %.1f",
+                    (double)cam_pos.x, (double)cam_pos.y, (double)cam_pos.z);
+            ui_text(&debug_ui, "CHUNKS  %d", active_chunks);
+            float rd = (float)render_distance;
+            if (ui_slider_float(&debug_ui, "RENDER DIST", &rd, 1.0f, 8.0f))
+                render_distance = (int)(rd + 0.5f);
+            ui_panel_end(&debug_ui);
+            ui_end(&debug_ui);
+
+            renderer_enable(R_CAP_DEPTH_TEST);
         }
 
         if (now - last_save_flush >= 5.0) { world_flush_saves(&world); last_save_flush = now; }

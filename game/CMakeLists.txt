@@ -41,9 +41,11 @@ target_include_directories(kyub PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}            # game/ shims + headers
     ${CMAKE_SOURCE_DIR}/src/core           # linalg.h, log.h, timer.h, noise.h, frustum.h, input.h
     ${CMAKE_SOURCE_DIR}/src/platform       # platform.h
-    ${CMAKE_SOURCE_DIR}/src/render)        # renderer.h
+    ${CMAKE_SOURCE_DIR}/src/render         # renderer.h
+    ${CMAKE_SOURCE_DIR}/src/ui)            # ui.h
 
 target_link_libraries(kyub PRIVATE
     kiln_renderer
     kiln_platform
-    kiln_core)
+    kiln_core
+    kiln_ui)

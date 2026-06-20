@@ -1,7 +1,5 @@
 #include "ui.h"
 
-#include "render.h"
-
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -36,7 +34,8 @@ void ui_init(ui_t *ui) {
 }
 
 void ui_begin(ui_t *ui, const ui_input_t *in, float screen_w,
-              float screen_h) {
+              float screen_h, const ui_draw_t *draw) {
+    ui->draw = *draw;
     ui->in = *in;
     ui->went_down = in->mouse_down && !ui->prev_down;
     ui->went_up = !in->mouse_down && ui->prev_down;
@@ -75,7 +74,7 @@ void ui_panel_begin(ui_t *ui, float x, float y, float w) {
     if (h <= 0.0f) {
         h = UI_ROW; /* first frame: self-corrects next frame */
     }
-    render_rect(x, y, w, h, COL_PANEL[0], COL_PANEL[1], COL_PANEL[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, COL_PANEL[0], COL_PANEL[1], COL_PANEL[2]);
 
     if (ui->in.pointer_valid &&
         point_in(ui->in.mouse_x, ui->in.mouse_y, x, y, w, h)) {
@@ -105,9 +104,9 @@ static bool widget_over(ui_t *ui, float x, float y, float w, float h) {
            point_in(ui->in.mouse_x, ui->in.mouse_y, x, y, w, h);
 }
 
-static void draw_label(float x, float y, float row_h, const char *s) {
+static void draw_label(ui_t *ui, float x, float y, float row_h, const char *s) {
     float ty = y + (row_h - UI_GLYPH_H) * 0.5f;
-    render_text(x, ty, UI_SCALE, COL_TEXT[0], COL_TEXT[1], COL_TEXT[2], s);
+    ui->draw.text(ui->draw.userdata, x, ty, UI_SCALE, COL_TEXT[0], COL_TEXT[1], COL_TEXT[2], s);
 }
 
 void ui_text(ui_t *ui, const char *fmt, ...) {
@@ -119,7 +118,7 @@ void ui_text(ui_t *ui, const char *fmt, ...) {
 
     float x, y, w, h;
     next_row(ui, &x, &y, &w, &h);
-    draw_label(x, y, h, buf);
+    draw_label(ui, x, y, h, buf);
 }
 
 bool ui_button(ui_t *ui, const char *label) {
@@ -128,15 +127,11 @@ bool ui_button(ui_t *ui, const char *label) {
     next_row(ui, &x, &y, &w, &h);
 
     bool over = widget_over(ui, x, y, w, h);
-    if (over) {
-        ui->hot_id = id;
-    }
+    if (over) ui->hot_id = id;
     bool clicked = false;
     if (ui->active_id == id) {
         if (ui->went_up) {
-            if (over) {
-                clicked = true;
-            }
+            if (over) clicked = true;
             ui->active_id = 0;
         }
     } else if (over && ui->went_down) {
@@ -144,10 +139,10 @@ bool ui_button(ui_t *ui, const char *label) {
     }
 
     const float *c = (ui->active_id == id) ? COL_ACTIVE
-                     : over               ? COL_HOT
-                                          : COL_WIDGET;
-    render_rect(x, y, w, h, c[0], c[1], c[2]);
-    draw_label(x + (w - text_width(label)) * 0.5f, y, h, label);
+                     : over                ? COL_HOT
+                                           : COL_WIDGET;
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, c[0], c[1], c[2]);
+    draw_label(ui, x + (w - text_width(label)) * 0.5f, y, h, label);
     return clicked;
 }
 
@@ -156,17 +151,12 @@ bool ui_checkbox(ui_t *ui, const char *label, bool *value) {
     float x, y, w, h;
     next_row(ui, &x, &y, &w, &h);
 
-    bool over = widget_over(ui, x, y, w, h); /* whole row toggles */
-    if (over) {
-        ui->hot_id = id;
-    }
+    bool over = widget_over(ui, x, y, w, h);
+    if (over) ui->hot_id = id;
     bool changed = false;
     if (ui->active_id == id) {
         if (ui->went_up) {
-            if (over) {
-                *value = !*value;
-                changed = true;
-            }
+            if (over) { *value = !*value; changed = true; }
             ui->active_id = 0;
         }
     } else if (over && ui->went_down) {
@@ -177,13 +167,13 @@ bool ui_checkbox(ui_t *ui, const char *label, bool *value) {
     float bx = x + 2.0f;
     float by = y + 3.0f;
     const float *c = over ? COL_HOT : COL_WIDGET;
-    render_rect(bx, by, box, box, c[0], c[1], c[2]);
+    ui->draw.rect(ui->draw.userdata, bx, by, box, box, c[0], c[1], c[2]);
     if (*value) {
         float in = 4.0f;
-        render_rect(bx + in, by + in, box - 2.0f * in, box - 2.0f * in,
-                    COL_CHECK[0], COL_CHECK[1], COL_CHECK[2]);
+        ui->draw.rect(ui->draw.userdata, bx + in, by + in, box - 2.0f * in, box - 2.0f * in,
+                      COL_CHECK[0], COL_CHECK[1], COL_CHECK[2]);
     }
-    draw_label(bx + box + 8.0f, y, h, label);
+    draw_label(ui, bx + box + 8.0f, y, h, label);
     return changed;
 }
 
@@ -194,34 +184,25 @@ bool ui_slider_float(ui_t *ui, const char *label, float *value, float min,
     next_row(ui, &x, &y, &w, &h);
 
     bool over = widget_over(ui, x, y, w, h);
-    if (over) {
-        ui->hot_id = id;
-    }
-    if (over && ui->went_down) {
-        ui->active_id = id;
-    }
+    if (over) ui->hot_id = id;
+    if (over && ui->went_down) ui->active_id = id;
     bool changed = false;
     if (ui->active_id == id) {
         float t = (ui->in.mouse_x - x) / w;
         t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
         float nv = min + t * (max - min);
-        if (nv != *value) {
-            *value = nv;
-            changed = true;
-        }
-        if (ui->went_up) {
-            ui->active_id = 0;
-        }
+        if (nv != *value) { *value = nv; changed = true; }
+        if (ui->went_up) ui->active_id = 0;
     }
 
     float t = (max > min) ? (*value - min) / (max - min) : 0.0f;
     t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
-    const float *track = over || ui->active_id == id ? COL_HOT : COL_WIDGET;
-    render_rect(x, y, w, h, track[0], track[1], track[2]);
-    render_rect(x, y, w * t, h, COL_FILL[0], COL_FILL[1], COL_FILL[2]);
+    const float *track = (over || ui->active_id == id) ? COL_HOT : COL_WIDGET;
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, track[0], track[1], track[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, w * t, h, COL_FILL[0], COL_FILL[1], COL_FILL[2]);
 
     char buf[256];
     snprintf(buf, sizeof(buf), "%s: %.2f", label, (double)*value);
-    draw_label(x + 6.0f, y, h, buf);
+    draw_label(ui, x + 6.0f, y, h, buf);
     return changed;
 }

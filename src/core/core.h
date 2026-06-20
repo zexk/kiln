@@ -4,6 +4,11 @@
 
 void core_init(void);
 
+/* Install signal handlers that print a backtrace (POSIX) or the signal number
+   (Win32) to stderr before flushing the log and aborting.  Call once at
+   startup, before any other initialisation. */
+void core_install_crash_handler(void);
+
 /* Resolve a resource directory at runtime into `out` (capacity `cap`). Priority:
    the $<env_var> override; else <executable_dir>/../share/kiln/<name> when it
    exists (the installed layout, e.g. under a Nix store path); else `fallback`

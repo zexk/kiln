@@ -209,7 +209,9 @@ static void load_chunk(World *world, int x, int z) {
             world->chunks[i].mesh = malloc(sizeof(Mesh));
             mesh_init(world->chunks[i].mesh);
             world->chunks[i].voxel_tex = R_INVALID_HANDLE;
-            voxel_upload_texture(&world->chunks[i].voxel_tex, world->chunks[i].chunk);
+            /* voxel_upload_texture only needed for GPU compute meshing */
+            if (world->mesh_compute_program != R_INVALID_HANDLE)
+                voxel_upload_texture(&world->chunks[i].voxel_tex, world->chunks[i].chunk);
             mesh_generate_greedy(world->chunks[i].mesh, world->chunks[i].chunk);
             mesh_upload(world->chunks[i].mesh);
             world->chunks[i].active = true;

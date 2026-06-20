@@ -144,7 +144,7 @@ VkPipeline create_graphics_pipeline(VkShaderModule vert, VkShaderModule frag,
     binding.binding   = 0;
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    VkVertexInputAttributeDescription attrs[5] = {0};
+    VkVertexInputAttributeDescription attrs[6] = {0};
     uint32_t attr_count = 0;
 
     switch (cfg->vformat) {
@@ -155,9 +155,14 @@ VkPipeline create_graphics_pipeline(VkShaderModule vert, VkShaderModule frag,
         attrs[2] = (VkVertexInputAttributeDescription){2, 0, VK_FORMAT_R32G32B32_SFLOAT, 32};
         attrs[3] = (VkVertexInputAttributeDescription){3, 0, VK_FORMAT_R32_SFLOAT,        44};
         attrs[4] = (VkVertexInputAttributeDescription){4, 0, VK_FORMAT_R32G32_SFLOAT,     48};
-        attr_count = 5;
+        attrs[5] = (VkVertexInputAttributeDescription){5, 0, VK_FORMAT_R32_SFLOAT,        56}; /* texture_layer */
+        attr_count = 6;
         break;
     case VERTEX_FORMAT_SKYBOX:
+        binding.stride = 8;   /* 2D NDC xy: skybox uses full-screen triangle */
+        attrs[0] = (VkVertexInputAttributeDescription){0, 0, VK_FORMAT_R32G32_SFLOAT, 0};
+        attr_count = 1;
+        break;
     case VERTEX_FORMAT_OUTLINE:
         binding.stride = 12;
         attrs[0] = (VkVertexInputAttributeDescription){0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
@@ -331,7 +336,11 @@ void renderer_destroy_program(R_Program program) {
     vkDestroyDescriptorSetLayout(g_vk.device, pipe->desc_set_layout, NULL);
     vkDestroyShaderModule(g_vk.device, pipe->vert_module, NULL);
     vkDestroyShaderModule(g_vk.device, pipe->frag_module, NULL);
-    pipe->pipeline = VK_NULL_HANDLE;
+    pipe->pipeline         = VK_NULL_HANDLE;
+    pipe->layout           = VK_NULL_HANDLE;
+    pipe->desc_set_layout  = VK_NULL_HANDLE;
+    pipe->vert_module      = VK_NULL_HANDLE;
+    pipe->frag_module      = VK_NULL_HANDLE;
 }
 
 void renderer_use_program(R_Program program) {
@@ -360,9 +369,9 @@ void renderer_uniform_mat4(int loc, const float *m) {
     if (loc < 0 || loc >= g_uniform_count || !m) return;
     int offset = g_uniforms[loc].offset;
     const char *n = g_uniforms[loc].name;
-    if (strstr(n, "model"))      offset = 0;
-    else if (strstr(n, "view"))  offset = 64;
-    else if (strstr(n, "proj"))  offset = 128;
+    if (!strcmp(n, "model"))                                              offset = 0;
+    else if (!strcmp(n, "view") || !strcmp(n, "inv_view_rotation"))      offset = 64;
+    else if (!strcmp(n, "projection") || !strcmp(n, "inv_projection"))   offset = 128;
     if (offset + 64 > 256) return;
     memcpy(g_push_constants + offset, m, 64);
     g_push_dirty = true;

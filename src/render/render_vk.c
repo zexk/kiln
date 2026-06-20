@@ -1,6 +1,12 @@
-#define VK_USE_PLATFORM_XLIB_KHR
+#ifdef _WIN32
+#  define VK_USE_PLATFORM_WIN32_KHR
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#else
+#  define VK_USE_PLATFORM_XLIB_KHR
+#  include <X11/Xlib.h>
+#endif
 #include <vulkan/vulkan.h>
-#include <X11/Xlib.h>
 
 #include "render.h"
 #include "core.h"
@@ -367,7 +373,11 @@ static bool create_instance(void) {
     const char *extensions[3];
     uint32_t ext_count = 0;
     extensions[ext_count++] = VK_KHR_SURFACE_EXTENSION_NAME;
+#ifdef _WIN32
+    extensions[ext_count++] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+#else
     extensions[ext_count++] = VK_KHR_XLIB_SURFACE_EXTENSION_NAME;
+#endif
     if (validation) {
         extensions[ext_count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     }
@@ -408,11 +418,20 @@ static bool create_instance(void) {
 }
 
 static bool create_surface(void) {
+    platform_native_handles_t nh = window_get_native_handles(g.window);
+#ifdef _WIN32
+    VkWin32SurfaceCreateInfoKHR info = {0};
+    info.sType     = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+    info.hinstance = (HINSTANCE)nh.display;
+    info.hwnd      = (HWND)(uintptr_t)nh.window;
+    VK_CHECK(vkCreateWin32SurfaceKHR(g.instance, &info, NULL, &g.surface));
+#else
     VkXlibSurfaceCreateInfoKHR info = {0};
-    info.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
-    info.dpy = (Display *)window_x11_display(g.window);
-    info.window = (Window)window_x11_window(g.window);
+    info.sType  = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
+    info.dpy    = (Display *)nh.display;
+    info.window = (Window)nh.window;
     VK_CHECK(vkCreateXlibSurfaceKHR(g.instance, &info, NULL, &g.surface));
+#endif
     return true;
 }
 

@@ -13,6 +13,8 @@
 #include "kmesh.h"
 #include "scene.h"
 
+#include "timer.h"
+
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -689,8 +691,8 @@ void app_run(app_t *app) {
         run_pick_selftest(app);
     }
 
-    struct timespec prev;
-    clock_gettime(CLOCK_MONOTONIC, &prev);
+    kln_timer_t frame_timer;
+    kln_timer_init(&frame_timer);
 
     bool running = true;
     while (running) {
@@ -705,7 +707,7 @@ void app_run(app_t *app) {
 
             /* Track pointer state for the UI regardless of who consumes it. */
             switch (event.type) {
-            case EVENT_MOUSE_MOVE:
+            case EVENT_MOUSE_MOTION:
                 app->mouse_x = (float)event.motion.x;
                 app->mouse_y = (float)event.motion.y;
                 /* Accumulate motion via deltas (valid even under cursor capture)
@@ -715,29 +717,28 @@ void app_run(app_t *app) {
                                               abs(event.motion.dy));
                 }
                 break;
-            case EVENT_BUTTON_DOWN:
+            case EVENT_MOUSE_BUTTON:
                 if (event.button.button == MOUSE_BUTTON_LEFT) {
-                    app->mouse_left = true;
-                    /* Arm a pick only when nothing else owns the mouse; record
-                       the press pixel while the cursor is still un-warped. */
-                    if (!app->ui_capture && !app->gizmo_capture) {
-                        app->pick_armed = true;
-                        app->pick_down_x = app->mouse_x;
-                        app->pick_down_y = app->mouse_y;
-                        app->pick_drag = 0.0f;
+                    if (event.button.down) {
+                        app->mouse_left = true;
+                        /* Arm a pick only when nothing else owns the mouse; record
+                           the press pixel while the cursor is still un-warped. */
+                        if (!app->ui_capture && !app->gizmo_capture) {
+                            app->pick_armed = true;
+                            app->pick_down_x = app->mouse_x;
+                            app->pick_down_y = app->mouse_y;
+                            app->pick_drag = 0.0f;
+                        }
+                    } else {
+                        app->mouse_left = false;
+                        /* A near-stationary release that nothing else grabbed is a
+                           selection click. */
+                        if (app->pick_armed && app->pick_drag < 5.0f &&
+                            !app->ui_capture && !app->gizmo_capture) {
+                            app->pick_request = true;
+                        }
+                        app->pick_armed = false;
                     }
-                }
-                break;
-            case EVENT_BUTTON_UP:
-                if (event.button.button == MOUSE_BUTTON_LEFT) {
-                    app->mouse_left = false;
-                    /* A near-stationary release that nothing else grabbed is a
-                       selection click. */
-                    if (app->pick_armed && app->pick_drag < 5.0f &&
-                        !app->ui_capture && !app->gizmo_capture) {
-                        app->pick_request = true;
-                    }
-                    app->pick_armed = false;
                 }
                 break;
             default:
@@ -747,9 +748,8 @@ void app_run(app_t *app) {
             /* The camera gets mouse events only when neither the UI nor the
                gizmo owned the mouse last frame; non-mouse events always pass
                through. */
-            bool mouse_ev = event.type == EVENT_MOUSE_MOVE ||
-                            event.type == EVENT_BUTTON_DOWN ||
-                            event.type == EVENT_BUTTON_UP ||
+            bool mouse_ev = event.type == EVENT_MOUSE_MOTION ||
+                            event.type == EVENT_MOUSE_BUTTON ||
                             event.type == EVENT_SCROLL;
             if (!(mouse_ev && (app->ui_capture || app->gizmo_capture))) {
                 camera_handle_event(&app->camera, &event);
@@ -763,11 +763,7 @@ void app_run(app_t *app) {
                                    ? CURSOR_DISABLED
                                    : CURSOR_NORMAL);
 
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        float dt = (float)(now.tv_sec - prev.tv_sec) +
-                   (float)(now.tv_nsec - prev.tv_nsec) * 1e-9f;
-        prev = now;
+        float dt = (float)kln_timer_reset(&frame_timer);
         if (dt > 0.0f) {
             float inst = 1.0f / dt;
             app->fps = (app->fps > 0.0f) ? app->fps * 0.9f + inst * 0.1f : inst;

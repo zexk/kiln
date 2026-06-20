@@ -11,8 +11,11 @@ endif()
 
 add_compile_options(-Wall -Wextra)
 
-find_package(X11 REQUIRED)
+if(NOT WIN32)
+    find_package(X11 REQUIRED)
+endif()
 
+option(BUILD_TESTING "Build tests" ON)
 enable_testing()
 
 add_subdirectory(src/core)
@@ -25,7 +28,9 @@ add_subdirectory(src/gizmo)
 add_subdirectory(src/assets)
 add_subdirectory(src/app)
 add_subdirectory(src/tools)
-add_subdirectory(tests)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
 # Install baked assets only: .obj source files are excluded from the shipped
 # tree — only .kmesh binaries (produced by kiln-bake) are installed.

@@ -97,21 +97,14 @@ bool camera_is_navigating(const camera_t *cam) {
 
 void camera_handle_event(camera_t *cam, const event_t *ev) {
     switch (ev->type) {
-    case EVENT_BUTTON_DOWN:
+    case EVENT_MOUSE_BUTTON:
         if (ev->button.button == MOUSE_BUTTON_LEFT) {
-            cam->orbiting = true;
+            cam->orbiting = ev->button.down;
         } else if (ev->button.button == MOUSE_BUTTON_RIGHT) {
-            cam->panning = true;
+            cam->panning = ev->button.down;
         }
         break;
-    case EVENT_BUTTON_UP:
-        if (ev->button.button == MOUSE_BUTTON_LEFT) {
-            cam->orbiting = false;
-        } else if (ev->button.button == MOUSE_BUTTON_RIGHT) {
-            cam->panning = false;
-        }
-        break;
-    case EVENT_MOUSE_MOVE:
+    case EVENT_MOUSE_MOTION:
         if (cam->orbiting) {
             orbit(cam, ev->motion.dx, ev->motion.dy);
         }

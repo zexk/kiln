@@ -26,7 +26,8 @@ if(KILN_RENDERER STREQUAL "vulkan")
     target_compile_definitions(kiln_render PRIVATE
         KILN_SHADER_DIR="${shader_out_dir}")
     target_link_libraries(kiln_render PUBLIC
-        kiln_core kiln_platform Vulkan::Vulkan X11::X11)
+        kiln_core kiln_platform Vulkan::Vulkan
+        $<$<NOT:$<BOOL:${WIN32}>>:X11::X11>)
 
     install(DIRECTORY ${shader_out_dir}/ DESTINATION share/kiln/shaders
             FILES_MATCHING PATTERN "*.spv")

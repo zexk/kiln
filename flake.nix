@@ -10,15 +10,17 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        mingw = pkgs.pkgsCross.mingwW64;
 
-        nativeBuildInputs = with pkgs; [
-          gcc
+        # Host tools used by both Linux and Win32 builds.
+        hostTools = with pkgs; [
           cmake
           ninja
           pkg-config
+          shaderc   # provides glslc; shader compilation always runs on host
         ];
 
-        buildInputs = with pkgs; [
+        linuxBuildInputs = with pkgs; [
           libX11
           libGL
           vulkan-loader
@@ -32,27 +34,64 @@
       {
         formatter = pkgs.nixpkgs-fmt;
 
+        # ── Linux native package ─────────────────────────────────────────────
         packages.default = pkgs.stdenv.mkDerivation {
           pname = "kiln";
           version = "0.1.0";
           src = ./.;
-          inherit nativeBuildInputs buildInputs checkInputs;
+          nativeBuildInputs = with pkgs; [ gcc ] ++ hostTools;
+          buildInputs = linuxBuildInputs ++ checkInputs;
           doCheck = true;
         };
 
+        # ── Win32 cross-compiled package (host: Linux, target: x86_64-windows)
+        #    Requires pkgs.pkgsCross.mingwW64 to be available.
+        #    The Vulkan loader (vulkan-1.dll) is linked at build time via the
+        #    mingw import lib; at runtime it must be present on the Windows
+        #    machine (installed with any Vulkan-capable GPU driver).
+        # ────────────────────────────────────────────────────────────────────
+        packages.win32 = mingw.stdenv.mkDerivation {
+          pname = "kiln-win32";
+          version = "0.1.0";
+          src = ./.;
+
+          # Build-host tools: cmake/ninja/glslc run on Linux during the build.
+          nativeBuildInputs = hostTools ++ [ pkgs.gcc ];
+
+          # Target libraries: headers + import libs for the Windows binary.
+          buildInputs = with mingw; [
+            vulkan-headers
+            vulkan-loader
+            windows.pthreads
+            windows.mcfgthreads   # provides libmcfgthread.a for static linking
+            stb
+          ];
+
+          cmakeFlags = [
+            "-DBUILD_TESTING=OFF"   # criterion not available for mingw
+          ];
+
+          # nixpkgs mingw uses the MCF GCC thread model.  libmcfgthread-2.dll
+          # is not a system DLL — bundle it next to kiln.exe so the binary
+          # runs on a stock Windows machine without any extra installs.
+          postInstall = ''
+            cp ${mingw.windows.mcfgthreads}/bin/libmcfgthread-2.dll $out/bin/
+          '';
+
+          doCheck = false;
+        };
+
+        # ── Dev shell ────────────────────────────────────────────────────────
         devShells.default = pkgs.mkShell {
-          inherit nativeBuildInputs;
-          buildInputs = buildInputs ++ checkInputs;
+          nativeBuildInputs = with pkgs; [ gcc ] ++ hostTools;
+          buildInputs = linuxBuildInputs ++ checkInputs;
           packages = with pkgs; [
             gdb
             vulkan-validation-layers
             spirv-tools
           ];
           shellHook = ''
-            # The validation layers are on PATH but the Vulkan loader can't find
-            # their manifests without this — otherwise it silently runs none.
             export VK_LAYER_PATH="${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d"
-            # Generate .clangd from NIX_CFLAGS_COMPILE so clangd finds system headers
             ${pkgs.bash}/bin/bash scripts/gen_clangd.sh
             echo "Kiln dev shell"
           '';

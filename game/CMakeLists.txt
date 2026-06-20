@@ -35,6 +35,14 @@ add_executable(kyub
     gui.c
     systems.c)
 
+# ── Asset copy ───────────────────────────────────────────────────────────────
+# platform_resolve_path() returns <exe_dir>/<path>, so assets must live
+# beside the binary at build/game/assets/.
+add_custom_command(TARGET kyub POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/assets
+        ${CMAKE_CURRENT_BINARY_DIR}/assets)
+
 add_dependencies(kyub kyub_shaders)
 
 target_include_directories(kyub PRIVATE

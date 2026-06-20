@@ -177,6 +177,14 @@ bool ui_checkbox(ui_t *ui, const char *label, bool *value) {
     return changed;
 }
 
+void ui_separator(ui_t *ui) {
+    float x = ui->panel_x + UI_PAD;
+    float y = ui->cursor_y + 4.0f;
+    float w = ui->panel_w - 2.0f * UI_PAD;
+    ui->draw.rect(ui->draw.userdata, x, y, w, 1.0f, 0.35f, 0.35f, 0.40f);
+    ui->cursor_y += 10.0f;
+}
+
 bool ui_slider_float(ui_t *ui, const char *label, float *value, float min,
                      float max) {
     int id = ++ui->id_counter;
@@ -205,4 +213,97 @@ bool ui_slider_float(ui_t *ui, const char *label, float *value, float min,
     snprintf(buf, sizeof(buf), "%s: %.2f", label, (double)*value);
     draw_label(ui, x + 6.0f, y, h, buf);
     return changed;
+}
+
+bool ui_slider_int(ui_t *ui, const char *label, int *value, int min, int max) {
+    int id = ++ui->id_counter;
+    float x, y, w, h;
+    next_row(ui, &x, &y, &w, &h);
+
+    bool over = widget_over(ui, x, y, w, h);
+    if (over) ui->hot_id = id;
+    if (over && ui->went_down) ui->active_id = id;
+    bool changed = false;
+    if (ui->active_id == id) {
+        float t = (ui->in.mouse_x - x) / w;
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        int nv = min + (int)(t * (float)(max - min) + 0.5f);
+        if (nv < min) nv = min;
+        if (nv > max) nv = max;
+        if (nv != *value) { *value = nv; changed = true; }
+        if (ui->went_up) ui->active_id = 0;
+    }
+
+    float t = (max > min) ? (float)(*value - min) / (float)(max - min) : 0.0f;
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    const float *track = (over || ui->active_id == id) ? COL_HOT : COL_WIDGET;
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, track[0], track[1], track[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, w * t, h, COL_FILL[0], COL_FILL[1], COL_FILL[2]);
+
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s: %d", label, *value);
+    draw_label(ui, x + 6.0f, y, h, buf);
+    return changed;
+}
+
+void ui_progress(ui_t *ui, const char *label, float value, float max) {
+    float x, y, w, h;
+    next_row(ui, &x, &y, &w, &h);
+
+    float t = (max > 0.0f) ? value / max : 0.0f;
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, COL_WIDGET[0], COL_WIDGET[1], COL_WIDGET[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, w * t, h, COL_FILL[0], COL_FILL[1], COL_FILL[2]);
+
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s: %.0f/%.0f", label, (double)value, (double)max);
+    draw_label(ui, x + 6.0f, y, h, buf);
+}
+
+bool ui_input_int(ui_t *ui, const char *label, int *value, int step) {
+    int id_m = ++ui->id_counter;
+    int id_p = ++ui->id_counter;
+    float x, y, w, h;
+    next_row(ui, &x, &y, &w, &h);
+
+    float bw  = h;
+    float mx  = x + w - 2.0f * bw - 4.0f;
+    float px  = x + w - bw;
+    float fw  = mx - x;
+
+    ui->draw.rect(ui->draw.userdata, x, y, fw, h, COL_WIDGET[0], COL_WIDGET[1], COL_WIDGET[2]);
+
+    bool over_m = widget_over(ui, mx, y, bw, h);
+    if (over_m) ui->hot_id = id_m;
+    bool clicked = false;
+    if (ui->active_id == id_m) {
+        if (ui->went_up) {
+            if (over_m) { *value -= step; clicked = true; }
+            ui->active_id = 0;
+        }
+    } else if (over_m && ui->went_down) {
+        ui->active_id = id_m;
+    }
+    const float *cm = (ui->active_id == id_m) ? COL_ACTIVE : over_m ? COL_HOT : COL_WIDGET;
+    ui->draw.rect(ui->draw.userdata, mx, y, bw, h, cm[0], cm[1], cm[2]);
+    draw_label(ui, mx + (bw - UI_GLYPH_W) * 0.5f, y, h, "-");
+
+    bool over_p = widget_over(ui, px, y, bw, h);
+    if (over_p) ui->hot_id = id_p;
+    if (ui->active_id == id_p) {
+        if (ui->went_up) {
+            if (over_p) { *value += step; clicked = true; }
+            ui->active_id = 0;
+        }
+    } else if (over_p && ui->went_down) {
+        ui->active_id = id_p;
+    }
+    const float *cp = (ui->active_id == id_p) ? COL_ACTIVE : over_p ? COL_HOT : COL_WIDGET;
+    ui->draw.rect(ui->draw.userdata, px, y, bw, h, cp[0], cp[1], cp[2]);
+    draw_label(ui, px + (bw - UI_GLYPH_W) * 0.5f, y, h, "+");
+
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s: %d", label, *value);
+    draw_label(ui, x + 6.0f, y, h, buf);
+    return clicked;
 }

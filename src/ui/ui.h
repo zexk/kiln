@@ -69,7 +69,11 @@ void ui_panel_begin(ui_t *ui, float x, float y, float w);
 void ui_panel_end(ui_t *ui);
 
 void ui_text(ui_t *ui, const char *fmt, ...);
+void ui_separator(ui_t *ui);
 bool ui_button(ui_t *ui, const char *label);
 bool ui_checkbox(ui_t *ui, const char *label, bool *value);
 bool ui_slider_float(ui_t *ui, const char *label, float *value, float min,
                      float max);
+bool ui_slider_int(ui_t *ui, const char *label, int *value, int min, int max);
+void ui_progress(ui_t *ui, const char *label, float value, float max);
+bool ui_input_int(ui_t *ui, const char *label, int *value, int step);

@@ -501,13 +501,12 @@ int main(void) {
             };
             ui_begin(&debug_ui, &ui_in, (float)win_width, (float)win_height, &game_draw);
             ui_panel_begin(&debug_ui, 10.0f, 10.0f, 240.0f);
-            ui_text(&debug_ui, "%.0f FPS", (double)fps);
-            ui_text(&debug_ui, "POS  %.1f %.1f %.1f",
+            ui_text(&debug_ui, "%.0f fps", (double)fps);
+            ui_text(&debug_ui, "pos  %.1f %.1f %.1f",
                     (double)cam_pos.x, (double)cam_pos.y, (double)cam_pos.z);
-            ui_text(&debug_ui, "CHUNKS  %d", active_chunks);
-            float rd = (float)render_distance;
-            if (ui_slider_float(&debug_ui, "RENDER DIST", &rd, 1.0f, 8.0f))
-                render_distance = (int)(rd + 0.5f);
+            ui_progress(&debug_ui, "chunks", (float)active_chunks, (float)world.capacity);
+            ui_separator(&debug_ui);
+            ui_slider_int(&debug_ui, "render dist", &render_distance, 1, 8);
             ui_panel_end(&debug_ui);
             ui_end(&debug_ui);
 

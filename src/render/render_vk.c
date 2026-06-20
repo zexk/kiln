@@ -1246,10 +1246,7 @@ void render_text(float x, float y, float scale, float r, float gr, float b,
             pen_y += 8.0f * scale;
             continue;
         }
-        if (c >= 'a' && c <= 'z') {
-            c -= 32; /* fold to uppercase */
-        }
-        if (c < 0x20 || c > 0x5F) {
+        if (c < 0x20 || c > 0x7F) {
             c = '?';
         }
         const uint8_t *glyph = kiln_font8x8[c - 0x20];

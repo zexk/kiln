@@ -52,7 +52,7 @@ void render_mesh(mesh_handle_t mesh, material_handle_t material, mat4_t model);
 /* Queue a line of debug text, positioned in screen pixels with a top-left
    origin and +y pointing down. Each glyph is scale*8 px tall. Drawn on top of
    the frame with no depth test. Call before render_draw; the queue is cleared
-   every frame. Lowercase letters render as uppercase (see font8x8.h). */
+   every frame. */
 void render_text(float x, float y, float scale, float r, float g, float b,
                  const char *str);
 

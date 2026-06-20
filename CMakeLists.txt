@@ -11,7 +11,6 @@ endif()
 
 add_compile_options(-Wall -Wextra)
 
-find_package(Vulkan REQUIRED)
 find_package(X11 REQUIRED)
 
 enable_testing()

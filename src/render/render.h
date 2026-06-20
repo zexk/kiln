@@ -16,11 +16,12 @@ typedef uint32_t material_handle_t;
 #define RENDER_TEXTURE_INVALID UINT32_MAX
 #define RENDER_MATERIAL_INVALID UINT32_MAX
 
-/* Vulkan renderer. Owns the device, swapchain and a lit mesh pipeline. The
-   window must outlive the renderer.
+/* Renderer: manages GPU resources and records one frame per render_draw call.
+   The implementation is selected at build time via KILN_RENDERER (default:
+   vulkan). The window must outlive the renderer.
 
    Per-frame usage: set the camera, queue one render_mesh per visible object,
-   optionally queue debug text, then call render_draw to record and present.
+   optionally queue debug text/rects/lines, then call render_draw to present.
    The queues are cleared every frame. The renderer is deliberately
    ECS-agnostic: callers translate their scene into camera + model matrices. */
 bool render_init(window_t *window);

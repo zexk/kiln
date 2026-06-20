@@ -10,6 +10,7 @@
 #include "render.h"
 #include "ui.h"
 #include "assets.h"
+#include "kmesh.h"
 #include "scene.h"
 
 #include <math.h>
@@ -95,9 +96,20 @@ static int add_prototype(app_t *app, const char *name, cpu_mesh_t *m,
 static int load_prototype(app_t *app, const char *name, const char *path,
                           material_handle_t mat) {
     cpu_mesh_t m;
-    if (!obj_load(path, &m)) {
+
+    /* Prefer a pre-baked .kmesh alongside the .obj; fall back to OBJ parsing. */
+    char kpath[1200];
+    size_t plen = strlen(path);
+    bool loaded = false;
+    if (plen > 4 && path[plen - 4] == '.' && path[plen - 3] == 'o' &&
+        path[plen - 2] == 'b' && path[plen - 1] == 'j') {
+        snprintf(kpath, sizeof(kpath), "%.*s.kmesh", (int)(plen - 4), path);
+        loaded = kmesh_load(kpath, &m);
+    }
+    if (!loaded && !obj_load(path, &m)) {
         return -1;
     }
+
     int idx = add_prototype(app, name, &m, mat);
     cpu_mesh_free(&m);
     return idx;
@@ -474,7 +486,7 @@ static void run_pick_selftest(app_t *app) {
            total, corner_miss ? "OK" : "FAIL");
 }
 
-static const char *SCENE_PATH = "scene.kln";
+static const char *SCENE_PATH = "scene.kscn";
 
 /* Serialize every renderable entity to a scene file. */
 static void scene_do_save(app_t *app) {

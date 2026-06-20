@@ -1,4 +1,7 @@
 build/
+kyub-port/
+compile_commands.json
+.clangd
 *.o
 *.d
 

@@ -52,6 +52,8 @@
             # The validation layers are on PATH but the Vulkan loader can't find
             # their manifests without this — otherwise it silently runs none.
             export VK_LAYER_PATH="${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d"
+            # Generate .clangd from NIX_CFLAGS_COMPILE so clangd finds system headers
+            ${pkgs.bash}/bin/bash scripts/gen_clangd.sh
             echo "Kiln dev shell"
           '';
         };

@@ -25,8 +25,10 @@ add_subdirectory(src/ui)
 add_subdirectory(src/gizmo)
 add_subdirectory(src/assets)
 add_subdirectory(src/app)
+add_subdirectory(src/tools)
 add_subdirectory(tests)
 
-# Install the asset tree (whatever is present — the large meshes are fetched
-# separately) so an installed build resolves <exe>/../share/kiln/assets.
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets DESTINATION share/kiln)
+# Install baked assets only: .obj source files are excluded from the shipped
+# tree — only .kmesh binaries (produced by kiln-bake) are installed.
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets DESTINATION share/kiln
+        PATTERN "*.obj" EXCLUDE)

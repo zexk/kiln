@@ -31,6 +31,22 @@ if(KILN_RENDERER STREQUAL "vulkan")
 
     install(DIRECTORY ${shader_out_dir}/ DESTINATION share/kiln/shaders
             FILES_MATCHING PATTERN "*.spv")
+
+    # ── Low-level abstract renderer (renderer_* API, ported from Kyub) ────────
+    add_library(kiln_renderer STATIC
+        r_renderer.c
+        r_instance.c
+        r_swapchain.c
+        r_command.c
+        r_pipeline.c
+        r_buffer.c
+        r_texture.c
+        r_draw.c)
+    target_link_libraries(kiln_renderer PUBLIC
+        kiln_core kiln_platform Vulkan::Vulkan
+        $<$<NOT:$<BOOL:${WIN32}>>:X11::X11>)
+    target_include_directories(kiln_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
 else()
     message(FATAL_ERROR "Unknown renderer backend: ${KILN_RENDERER}")
 endif()

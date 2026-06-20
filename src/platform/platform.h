@@ -81,7 +81,7 @@ typedef struct {
 /* Native window-system handles for Vulkan surface creation.
    Callers that need X11 types cast display to Display* and window to XID;
    Win32 callers cast display to HINSTANCE and window to HWND. */
-typedef struct {
+typedef struct platform_native_handles {
     void         *display;
     unsigned long window;
 } platform_native_handles_t;

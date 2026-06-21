@@ -11,9 +11,12 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) out vec3 frag_normal;
 layout(location = 1) out vec2 frag_uv;
+layout(location = 2) out vec3 frag_world_pos;
 
 void main() {
-    gl_Position = pc.mvp * vec4(in_position, 1.0);
-    frag_normal = transpose(inverse(mat3(pc.model))) * in_normal;
-    frag_uv = in_uv;
+    vec4 world     = pc.model * vec4(in_position, 1.0);
+    gl_Position    = pc.mvp   * vec4(in_position, 1.0);
+    frag_normal    = transpose(inverse(mat3(pc.model))) * in_normal;
+    frag_uv        = in_uv;
+    frag_world_pos = world.xyz;
 }

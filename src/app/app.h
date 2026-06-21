@@ -3,6 +3,7 @@
 #include <stdbool.h>
 
 #include "camera.h"
+#include "fps_camera.h"
 #include "gizmo.h"
 #include "linalg.h"
 #include "platform.h"
@@ -76,6 +77,12 @@ typedef struct {
     material_handle_t highlight_material;
     gizmo_t gizmo;
     bool gizmo_capture; /* gizmo owned the mouse last frame; gates camera */
+
+    /* fly camera: TAB toggles; WASD+QE move, mouse look rotates */
+    fps_camera_t fly_cam;
+    vec3_t       fly_pos;
+    bool         fly_mode;
+    bool         fly_keys[KEY_COUNT]; /* held-key state tracked while in fly mode */
 
     /* diagnostics + things the UI tampers with */
     float fps;

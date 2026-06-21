@@ -1,5 +1,6 @@
 #include "app.h"
 
+#include "aabb.h"
 #include "camera.h"
 #include "core.h"
 #include "gizmo.h"
@@ -219,6 +220,9 @@ bool app_init(app_t *app) {
     app->camera.distance = 16.0f;
     app->camera.pitch = kln_radians(18.0f);
 
+    fps_camera_init(&app->fly_cam);
+    app->fly_pos = camera_eye(&app->camera);
+
     return true;
 }
 
@@ -247,8 +251,10 @@ static void render_scene(app_t *app) {
     window_size(app->window, &w, &h);
     float aspect = h ? (float)w / (float)h : 1.0f;
 
-    render_set_camera(camera_view(&app->camera),
-                      camera_proj(&app->camera, aspect));
+    mat4_t view = app->fly_mode
+        ? fps_camera_view(&app->fly_cam, app->fly_pos)
+        : camera_view(&app->camera);
+    render_set_camera(view, camera_proj(&app->camera, aspect));
 
     float ly = kln_radians(app->light_yaw);
     float lp = kln_radians(app->light_pitch);
@@ -366,36 +372,6 @@ static bool ray_triangle(vec3_t o, vec3_t dir, vec3_t a, vec3_t b, vec3_t c,
     return true;
 }
 
-/* Slab test: does the ray reach the AABB at some t >= 0? */
-static bool ray_aabb(vec3_t o, vec3_t dir, vec3_t mn, vec3_t mx) {
-    float ro[3] = {o.x, o.y, o.z};
-    float rd[3] = {dir.x, dir.y, dir.z};
-    float lo[3] = {mn.x, mn.y, mn.z};
-    float hi[3] = {mx.x, mx.y, mx.z};
-    float tmin = 0.0f, tmax = 1e30f;
-    for (int i = 0; i < 3; i++) {
-        if (rd[i] > -1e-8f && rd[i] < 1e-8f) {
-            if (ro[i] < lo[i] || ro[i] > hi[i]) {
-                return false; /* parallel and outside the slab */
-            }
-        } else {
-            float inv = 1.0f / rd[i];
-            float t1 = (lo[i] - ro[i]) * inv;
-            float t2 = (hi[i] - ro[i]) * inv;
-            if (t1 > t2) {
-                float tmp = t1;
-                t1 = t2;
-                t2 = tmp;
-            }
-            tmin = t1 > tmin ? t1 : tmin;
-            tmax = t2 < tmax ? t2 : tmax;
-            if (tmin > tmax) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
 
 /* Cast a world-space ray against every renderable's triangles and return the
    nearest hit entity, or ECS_ENTITY_NULL if the ray misses everything. The ray
@@ -417,7 +393,9 @@ static entity_t pick_entity(app_t *app, vec3_t origin, vec3_t dir) {
             mat4_inverse(mat4_from_trs(t->position, t->rotation, t->scale));
         vec3_t lo = mat4_transform_point(inv, origin);
         vec3_t ld = mat4_transform_dir(inv, dir);
-        if (!ray_aabb(lo, ld, p->pick_min, p->pick_max)) {
+        aabb_t pick_box = { p->pick_min, p->pick_max };
+        float pick_t;
+        if (!aabb_ray_intersect(&pick_box, lo, ld, &pick_t)) {
             continue;
         }
         entity_t e = query_entity(&it);
@@ -613,10 +591,17 @@ static void build_ui(app_t *app) {
     bool prev_wire = app->wireframe;
     ui_checkbox(&app->ui, "wireframe", &app->wireframe);
     if (app->wireframe != prev_wire) render_set_wireframe(app->wireframe);
-    ui_text(&app->ui, "cam  y%.0f p%.0f d%.1f",
-            (double)kln_degrees(app->camera.yaw),
-            (double)kln_degrees(app->camera.pitch),
-            (double)app->camera.distance);
+    if (app->fly_mode) {
+        ui_text(&app->ui, "FLY MODE  (TAB to exit)");
+        ui_text(&app->ui, "pos  %.1f %.1f %.1f",
+                (double)app->fly_pos.x, (double)app->fly_pos.y,
+                (double)app->fly_pos.z);
+    } else {
+        ui_text(&app->ui, "cam  y%.0f p%.0f d%.1f",
+                (double)kln_degrees(app->camera.yaw),
+                (double)kln_degrees(app->camera.pitch),
+                (double)app->camera.distance);
+    }
 
     ui_separator(&app->ui);
 
@@ -728,6 +713,26 @@ void app_run(app_t *app) {
                 continue;
             }
 
+            /* TAB toggles fly mode; sync position and look direction on entry. */
+            if (event.type == EVENT_KEY_DOWN && event.key.code == KEY_TAB) {
+                app->fly_mode = !app->fly_mode;
+                if (app->fly_mode) {
+                    app->fly_pos = camera_eye(&app->camera);
+                    app->fly_cam.pitch = -app->camera.pitch;
+                    app->fly_cam.yaw   = atan2f(-cosf(app->camera.yaw),
+                                                -sinf(app->camera.yaw));
+                    fps_camera_rotate(&app->fly_cam, 0.0f, 0.0f);
+                    app->gizmo_capture = false;
+                }
+                continue;
+            }
+
+            /* Track held keys for fly-mode WASD. */
+            if (event.type == EVENT_KEY_DOWN && event.key.code < KEY_COUNT)
+                app->fly_keys[event.key.code] = true;
+            if (event.type == EVENT_KEY_UP && event.key.code < KEY_COUNT)
+                app->fly_keys[event.key.code] = false;
+
             /* Track pointer state for the UI regardless of who consumes it. */
             switch (event.type) {
             case EVENT_MOUSE_MOTION:
@@ -768,21 +773,25 @@ void app_run(app_t *app) {
                 break;
             }
 
-            /* The camera gets mouse events only when neither the UI nor the
-               gizmo owned the mouse last frame; non-mouse events always pass
-               through. */
+            /* In fly mode feed mouse deltas to the fps camera; in orbit mode
+               pass events to the orbit camera (gated by UI/gizmo ownership). */
             bool mouse_ev = event.type == EVENT_MOUSE_MOTION ||
                             event.type == EVENT_MOUSE_BUTTON ||
                             event.type == EVENT_SCROLL;
-            if (!(mouse_ev && (app->ui_capture || app->gizmo_capture))) {
+            if (app->fly_mode) {
+                if (event.type == EVENT_MOUSE_MOTION)
+                    fps_camera_rotate(&app->fly_cam,
+                                      (float)event.motion.dx,
+                                      (float)event.motion.dy);
+            } else if (!(mouse_ev && (app->ui_capture || app->gizmo_capture))) {
                 camera_handle_event(&app->camera, &event);
             }
         }
 
-        /* Capture the cursor while dragging so orbit/pan can run unbounded and
-           never slip off the window; release it the moment the drag ends. */
+        /* Fly mode always captures; orbit captures while dragging. */
         window_set_cursor_mode(app->window,
-                               camera_is_navigating(&app->camera)
+                               (app->fly_mode ||
+                                camera_is_navigating(&app->camera))
                                    ? CURSOR_DISABLED
                                    : CURSOR_NORMAL);
 
@@ -794,17 +803,34 @@ void app_run(app_t *app) {
             app->frame_ms_head = (app->frame_ms_head + 1) % APP_FRAME_SAMPLES;
         }
 
+        /* WASD+QE fly movement. */
+        if (app->fly_mode && dt > 0.0f) {
+            const float speed = 5.0f;
+            vec3_t right, up_fly;
+            fps_camera_basis(&app->fly_cam, &right, &up_fly);
+            vec3_t front = app->fly_cam.front;
+            float  d = speed * dt;
+            if (app->fly_keys[KEY_W]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(front,  d));
+            if (app->fly_keys[KEY_S]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(front, -d));
+            if (app->fly_keys[KEY_A]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(right, -d));
+            if (app->fly_keys[KEY_D]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(right,  d));
+            if (app->fly_keys[KEY_Q]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(up_fly,-d));
+            if (app->fly_keys[KEY_E]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(up_fly, d));
+        }
+
         if (app->auto_rotate) {
             rotate_system(app, dt);
         }
 
         if (app->pick_request) {
             app->pick_request = false;
-            pick_at(app, app->pick_down_x, app->pick_down_y);
+            if (!app->fly_mode)
+                pick_at(app, app->pick_down_x, app->pick_down_y);
         }
 
         render_scene(app);
-        update_gizmo(app);
+        if (!app->fly_mode)
+            update_gizmo(app);
         build_ui(app);
         render_draw();
 

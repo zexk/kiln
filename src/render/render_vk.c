@@ -128,6 +128,9 @@ static struct {
     VkPipeline wireframe_pipeline; /* VK_POLYGON_MODE_LINE variant */
     bool wireframe;
     bool wireframe_supported;
+    bool aniso_supported;
+    float max_anisotropy;
+    bool blit_mip_supported; /* VK_FORMAT_R8G8B8A8_SRGB supports linear blit */
 
     VkCommandPool command_pool;
     VkCommandBuffer command_buffers[MAX_FRAMES_IN_FLIGHT];
@@ -516,6 +519,11 @@ static bool create_device(void) {
     VkPhysicalDeviceFeatures supported = {0};
     vkGetPhysicalDeviceFeatures(g.physical_device, &supported);
     g.wireframe_supported = (supported.fillModeNonSolid == VK_TRUE);
+    g.aniso_supported     = (supported.samplerAnisotropy == VK_TRUE);
+
+    VkPhysicalDeviceProperties phys_props;
+    vkGetPhysicalDeviceProperties(g.physical_device, &phys_props);
+    g.max_anisotropy = phys_props.limits.maxSamplerAnisotropy;
 
     VkPhysicalDeviceVulkan13Features features13 = {0};
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
@@ -526,7 +534,8 @@ static bool create_device(void) {
     VkPhysicalDeviceFeatures2 features2 = {0};
     features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     features2.pNext = &features13;
-    features2.features.fillModeNonSolid = supported.fillModeNonSolid;
+    features2.features.fillModeNonSolid  = supported.fillModeNonSolid;
+    features2.features.samplerAnisotropy = supported.samplerAnisotropy;
 
     VkDeviceCreateInfo info = {0};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -746,15 +755,27 @@ static bool create_material_infra(void) {
     pool.pPoolSizes = sizes;
     VK_CHECK(vkCreateDescriptorPool(g.device, &pool, NULL, &g.descriptor_pool));
 
+    VkFormatProperties fmt_props;
+    vkGetPhysicalDeviceFormatProperties(g.physical_device,
+                                        VK_FORMAT_R8G8B8A8_SRGB, &fmt_props);
+    g.blit_mip_supported =
+        (fmt_props.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) &&
+        (fmt_props.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT) &&
+        (fmt_props.optimalTilingFeatures &
+         VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
+
     VkSamplerCreateInfo sampler = {0};
-    sampler.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    sampler.magFilter = VK_FILTER_LINEAR;
-    sampler.minFilter = VK_FILTER_LINEAR;
-    sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sampler.anisotropyEnable = VK_FALSE; /* device feature not requested */
-    sampler.maxLod = 0.0f;               /* no mips yet */
+    sampler.sType            = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler.magFilter        = VK_FILTER_LINEAR;
+    sampler.minFilter        = VK_FILTER_LINEAR;
+    sampler.addressModeU     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.addressModeV     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.addressModeW     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sampler.anisotropyEnable = g.aniso_supported ? VK_TRUE : VK_FALSE;
+    sampler.maxAnisotropy    = g.max_anisotropy;
+    sampler.mipmapMode       = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sampler.minLod           = 0.0f;
+    sampler.maxLod           = 1000.0f; /* VK_LOD_CLAMP_NONE: use all mip levels */
     VK_CHECK(vkCreateSampler(g.device, &sampler, NULL, &g.sampler));
     return true;
 }
@@ -1237,6 +1258,29 @@ static void image_barrier(VkCommandBuffer cmd, VkImage image,
                          &barrier);
 }
 
+/* Per-mip-level colour barrier used during mipmap generation. */
+static void image_barrier_mip(VkCommandBuffer cmd, VkImage image,
+                               uint32_t base_mip, uint32_t level_count,
+                               VkImageLayout old_layout, VkImageLayout new_layout,
+                               VkAccessFlags src_access, VkAccessFlags dst_access,
+                               VkPipelineStageFlags src_stage,
+                               VkPipelineStageFlags dst_stage) {
+    VkImageMemoryBarrier b = {0};
+    b.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.oldLayout                       = old_layout;
+    b.newLayout                       = new_layout;
+    b.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+    b.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+    b.image                           = image;
+    b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.baseMipLevel   = base_mip;
+    b.subresourceRange.levelCount     = level_count;
+    b.subresourceRange.layerCount     = 1;
+    b.srcAccessMask                   = src_access;
+    b.dstAccessMask                   = dst_access;
+    vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, NULL, 0, NULL, 1, &b);
+}
+
 void render_set_camera(mat4_t view, mat4_t proj) {
     g.view = view;
     g.proj = proj;
@@ -1549,6 +1593,64 @@ mesh_handle_t render_upload_mesh(const cpu_mesh_t *mesh) {
     return g.mesh_count++;
 }
 
+static uint32_t calc_mip_levels(uint32_t w, uint32_t h) {
+    uint32_t dim = w > h ? w : h, n = 1;
+    while (dim > 1) { dim >>= 1; n++; }
+    return n;
+}
+
+/* Blit-chain mipmap generation.  Mip 0 must already be in
+   TRANSFER_DST_OPTIMAL when this is called.  Every mip level is
+   transitioned to SHADER_READ_ONLY_OPTIMAL on exit. */
+static void generate_mipmaps(VkCommandBuffer cmd, VkImage image,
+                              uint32_t w, uint32_t h, uint32_t mip_count) {
+    int32_t mw = (int32_t)w, mh = (int32_t)h;
+    for (uint32_t i = 1; i < mip_count; i++) {
+        int32_t nw = mw > 1 ? mw / 2 : 1;
+        int32_t nh = mh > 1 ? mh / 2 : 1;
+
+        image_barrier_mip(cmd, image, i - 1, 1,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+        image_barrier_mip(cmd, image, i, 1,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            0, VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+        VkImageBlit blit = {0};
+        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.srcSubresource.mipLevel   = i - 1;
+        blit.srcSubresource.layerCount = 1;
+        blit.srcOffsets[1]             = (VkOffset3D){mw, mh, 1};
+        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.dstSubresource.mipLevel   = i;
+        blit.dstSubresource.layerCount = 1;
+        blit.dstOffsets[1]             = (VkOffset3D){nw, nh, 1};
+        vkCmdBlitImage(cmd,
+                       image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &blit, VK_FILTER_LINEAR);
+
+        image_barrier_mip(cmd, image, i - 1, 1,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+
+        mw = nw; mh = nh;
+    }
+    /* Transition the last level out of DST. */
+    image_barrier_mip(cmd, image, mip_count - 1, 1,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+}
+
 texture_handle_t render_upload_texture(const uint8_t *rgba, uint32_t w,
                                        uint32_t h) {
     if (g.texture_count >= MAX_TEXTURES || w == 0 || h == 0) {
@@ -1563,20 +1665,24 @@ texture_handle_t render_upload_texture(const uint8_t *rgba, uint32_t w,
         return RENDER_TEXTURE_INVALID;
     }
 
+    uint32_t mip_count = (g.blit_mip_supported && w > 1 && h > 1)
+                         ? calc_mip_levels(w, h) : 1;
+
     gpu_texture_t t = {0};
     VkImageCreateInfo image = {0};
-    image.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    image.imageType = VK_IMAGE_TYPE_2D;
-    image.format = VK_FORMAT_R8G8B8A8_SRGB;
-    image.extent.width = w;
+    image.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image.imageType     = VK_IMAGE_TYPE_2D;
+    image.format        = VK_FORMAT_R8G8B8A8_SRGB;
+    image.extent.width  = w;
     image.extent.height = h;
-    image.extent.depth = 1;
-    image.mipLevels = 1;
-    image.arrayLayers = 1;
-    image.samples = VK_SAMPLE_COUNT_1_BIT;
-    image.tiling = VK_IMAGE_TILING_OPTIMAL;
-    image.usage =
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image.extent.depth  = 1;
+    image.mipLevels     = mip_count;
+    image.arrayLayers   = 1;
+    image.samples       = VK_SAMPLE_COUNT_1_BIT;
+    image.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    image.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT | /* blit source for mip gen */
+                          VK_IMAGE_USAGE_SAMPLED_BIT;
     image.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     texture_handle_t result = RENDER_TEXTURE_INVALID;
@@ -1614,22 +1720,26 @@ texture_handle_t render_upload_texture(const uint8_t *rgba, uint32_t w,
                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                                        &region);
 
-                image_barrier(cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                              VK_ACCESS_TRANSFER_WRITE_BIT,
-                              VK_ACCESS_SHADER_READ_BIT,
-                              VK_PIPELINE_STAGE_TRANSFER_BIT,
-                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                if (mip_count > 1) {
+                    generate_mipmaps(cmd, t.image, w, h, mip_count);
+                } else {
+                    image_barrier(cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                  VK_ACCESS_TRANSFER_WRITE_BIT,
+                                  VK_ACCESS_SHADER_READ_BIT,
+                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                }
                 end_single_time(cmd);
 
                 VkImageViewCreateInfo view = {0};
-                view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-                view.image = t.image;
-                view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-                view.format = VK_FORMAT_R8G8B8A8_SRGB;
+                view.sType        = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                view.image        = t.image;
+                view.viewType     = VK_IMAGE_VIEW_TYPE_2D;
+                view.format       = VK_FORMAT_R8G8B8A8_SRGB;
                 view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                view.subresourceRange.levelCount = 1;
+                view.subresourceRange.levelCount = mip_count;
                 view.subresourceRange.layerCount = 1;
                 if (vkCreateImageView(g.device, &view, NULL, &t.view) ==
                     VK_SUCCESS) {

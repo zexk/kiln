@@ -597,9 +597,10 @@ static void build_ui(app_t *app) {
     ui_begin(&app->ui, &in, (float)w, (float)h, &g_kln_ui_draw);
     ui_panel_begin(&app->ui, 12.0f, 12.0f, 300.0f);
 
-    ui_text(&app->ui, "kiln  %.0f fps  %.2f ms", (double)app->fps,
-            app->fps > 0.0f ? 1000.0 / (double)app->fps : 0.0);
-    ui_text(&app->ui, "draws %u", app->draw_count);
+    ui_graph(&app->ui, "frame ms",
+             app->frame_ms, APP_FRAME_SAMPLES, app->frame_ms_head,
+             50.0f, 1000.0f / 60.0f);
+    ui_text(&app->ui, "%.0f fps  draws %u", (double)app->fps, app->draw_count);
     ui_text(&app->ui, "cam  y%.0f p%.0f d%.1f",
             (double)kln_degrees(app->camera.yaw),
             (double)kln_degrees(app->camera.pitch),
@@ -777,6 +778,8 @@ void app_run(app_t *app) {
         if (dt > 0.0f) {
             float inst = 1.0f / dt;
             app->fps = (app->fps > 0.0f) ? app->fps * 0.9f + inst * 0.1f : inst;
+            app->frame_ms[app->frame_ms_head] = dt * 1000.0f;
+            app->frame_ms_head = (app->frame_ms_head + 1) % APP_FRAME_SAMPLES;
         }
 
         if (app->auto_rotate) {

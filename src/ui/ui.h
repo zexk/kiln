@@ -77,3 +77,11 @@ bool ui_slider_float(ui_t *ui, const char *label, float *value, float min,
 bool ui_slider_int(ui_t *ui, const char *label, int *value, int min, int max);
 void ui_progress(ui_t *ui, const char *label, float value, float max);
 bool ui_input_int(ui_t *ui, const char *label, int *value, int step);
+
+/* Rolling bar chart of `count` float samples stored in a circular buffer.
+   `head` is the index of the next write slot (oldest sample = head % count).
+   Bars are coloured green → yellow → red as values approach `max`.
+   Pass `target > 0` to draw a horizontal reference line at that value. */
+void ui_graph(ui_t *ui, const char *label,
+              const float *samples, int count, int head,
+              float max, float target);

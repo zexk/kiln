@@ -260,6 +260,48 @@ void ui_progress(ui_t *ui, const char *label, float value, float max) {
     draw_label(ui, x + 6.0f, y, h, buf);
 }
 
+#define UI_GRAPH_H (2.0f * UI_ROW + UI_GAP)
+
+void ui_graph(ui_t *ui, const char *label,
+              const float *samples, int count, int head,
+              float max, float target) {
+    if (count <= 0 || max <= 0.0f) return;
+
+    float x  = ui->panel_x + UI_PAD;
+    float y  = ui->cursor_y;
+    float w  = ui->panel_w - 2.0f * UI_PAD;
+    float gh = UI_GRAPH_H;
+    ui->cursor_y += gh + UI_GAP;
+
+    ui->draw.rect(ui->draw.userdata, x, y, w, gh,
+                  COL_WIDGET[0], COL_WIDGET[1], COL_WIDGET[2]);
+
+    float bw = w / (float)count;
+    for (int i = 0; i < count; i++) {
+        float v = samples[(head + i) % count];
+        float t = v / max;
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        if (t == 0.0f) continue;
+
+        float bh = t * gh;
+        float cr = t < 0.5f ? t * 2.0f : 1.0f;
+        float cg = t < 0.5f ? 1.0f : 1.0f - (t - 0.5f) * 2.0f;
+        ui->draw.rect(ui->draw.userdata,
+                      x + (float)i * bw, y + gh - bh, bw, bh, cr, cg, 0.0f);
+    }
+
+    if (target > 0.0f && target < max) {
+        float ly = y + gh * (1.0f - target / max);
+        ui->draw.rect(ui->draw.userdata, x, ly, w, 1.0f, 0.55f, 0.55f, 0.60f);
+    }
+
+    float latest = samples[(head + count - 1) % count];
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s: %.1f", label, (double)latest);
+    ui->draw.text(ui->draw.userdata, x + 3.0f, y + 3.0f, UI_SCALE,
+                  COL_TEXT[0], COL_TEXT[1], COL_TEXT[2], buf);
+}
+
 bool ui_input_int(ui_t *ui, const char *label, int *value, int step) {
     int id_m = ++ui->id_counter;
     int id_p = ++ui->id_counter;

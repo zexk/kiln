@@ -92,6 +92,11 @@ typedef struct {
 
     /* scene persistence: brief status line shown in the panel */
     char scene_status[64];
+
+    /* rolling frame-time history for the graph widget (milliseconds) */
+#define APP_FRAME_SAMPLES 128
+    float frame_ms[APP_FRAME_SAMPLES];
+    int   frame_ms_head;
 } app_t;
 
 bool app_init(app_t *app);

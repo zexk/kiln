@@ -33,6 +33,7 @@
 #define MAX_INSTANCES 4096
 #define SHADOW_MAP_SIZE   2048
 #define PP_FORMAT         VK_FORMAT_R16G16B16A16_SFLOAT /* HDR offscreen + bloom */
+#define MAX_CUBEMAPS      8
 #define MAX_INST_TOTAL  16384 /* total model matrices across all instanced batches */
 #define MAX_INST_BATCHES   64
 
@@ -224,6 +225,23 @@ static struct {
     VkBuffer     inst_vbuf[MAX_FRAMES_IN_FLIGHT];
     VkDeviceMemory inst_vmem[MAX_FRAMES_IN_FLIGHT];
     void        *inst_vmapped[MAX_FRAMES_IN_FLIGHT];
+
+    /* Cubemaps */
+    struct {
+        VkImage        image;
+        VkDeviceMemory memory;
+        VkImageView    view;
+    } cubemaps[MAX_CUBEMAPS];
+    uint32_t cubemap_count;
+
+    /* Skybox */
+    cubemap_handle_t active_skybox;   /* RENDER_CUBEMAP_INVALID = disabled */
+    VkSampler        skybox_sampler;
+    VkDescriptorSetLayout skybox_set_layout;
+    VkDescriptorPool  skybox_pool;
+    VkPipelineLayout  skybox_layout;
+    VkPipeline        skybox_pipeline;
+    VkDescriptorSet   skybox_sets[MAX_CUBEMAPS]; /* one per cubemap */
 
     /* Instanced colour pipelines (push = mat4 proj_view, 64 bytes). */
     VkPipelineLayout inst_layout;
@@ -1270,6 +1288,125 @@ static bool create_scene_infra(void) {
 /* ----------------------------------------------------------------------- */
 /* pipeline                                                                  */
 /* ----------------------------------------------------------------------- */
+
+static bool create_skybox_infra(void) {
+    g.active_skybox = RENDER_CUBEMAP_INVALID;
+
+    VkSamplerCreateInfo sci = {0};
+    sci.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sci.magFilter    = VK_FILTER_LINEAR;
+    sci.minFilter    = VK_FILTER_LINEAR;
+    sci.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.maxLod       = 1000.0f;
+    VK_CHECK(vkCreateSampler(g.device, &sci, NULL, &g.skybox_sampler));
+
+    VkDescriptorSetLayoutBinding bind = {0};
+    bind.binding        = 0;
+    bind.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bind.descriptorCount = 1;
+    bind.stageFlags     = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo dlci = {0};
+    dlci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dlci.bindingCount = 1;
+    dlci.pBindings    = &bind;
+    VK_CHECK(vkCreateDescriptorSetLayout(g.device, &dlci, NULL,
+                                         &g.skybox_set_layout));
+
+    VkDescriptorPoolSize pool_sz = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                    MAX_CUBEMAPS};
+    VkDescriptorPoolCreateInfo poolci = {0};
+    poolci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolci.maxSets       = MAX_CUBEMAPS;
+    poolci.poolSizeCount = 1;
+    poolci.pPoolSizes    = &pool_sz;
+    VK_CHECK(vkCreateDescriptorPool(g.device, &poolci, NULL, &g.skybox_pool));
+
+    /* Push constant: inv_proj (mat4) + inv_view_rot (mat4) = 128 bytes. */
+    VkPushConstantRange push = {VK_SHADER_STAGE_VERTEX_BIT, 0, 128};
+    VkPipelineLayoutCreateInfo plci = {0};
+    plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.setLayoutCount         = 1;
+    plci.pSetLayouts            = &g.skybox_set_layout;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges    = &push;
+    VK_CHECK(vkCreatePipelineLayout(g.device, &plci, NULL, &g.skybox_layout));
+
+    VkShaderModule vmod, fmod;
+    if (!create_shader_module("skybox.vert", &vmod) ||
+        !create_shader_module("skybox.frag", &fmod))
+        return false;
+
+    VkPipelineShaderStageCreateInfo stages[2] = {0};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vmod; stages[0].pName = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fmod; stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vi = {0};
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkPipelineInputAssemblyStateCreateInfo ia = {0};
+    ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo vps = {0};
+    vps.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vps.viewportCount = 1; vps.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo ras = {0};
+    ras.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    ras.polygonMode = VK_POLYGON_MODE_FILL;
+    ras.cullMode    = VK_CULL_MODE_NONE;
+    ras.lineWidth   = 1.0f;
+    VkPipelineMultisampleStateCreateInfo ms = {0};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo ds = {0};
+    ds.sType           = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_TRUE; ds.depthWriteEnable = VK_FALSE;
+    ds.depthCompareOp  = VK_COMPARE_OP_LESS_OR_EQUAL;
+    VkPipelineColorBlendAttachmentState att = {0};
+    att.colorWriteMask = 0xF;
+    VkPipelineColorBlendStateCreateInfo blend = {0};
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1; blend.pAttachments = &att;
+    VkDynamicState dyn_st[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn = {0};
+    dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = 2; dyn.pDynamicStates = dyn_st;
+    VkPipelineRenderingCreateInfo rci = {0};
+    rci.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    VkFormat skybox_color_fmt = PP_FORMAT;
+    rci.colorAttachmentCount = 1;
+    rci.pColorAttachmentFormats = &skybox_color_fmt;
+    rci.depthAttachmentFormat = g.depth_format;
+
+    VkGraphicsPipelineCreateInfo info = {0};
+    info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.pNext               = &rci;
+    info.stageCount          = 2; info.pStages = stages;
+    info.pVertexInputState   = &vi;
+    info.pInputAssemblyState = &ia;
+    info.pViewportState      = &vps;
+    info.pRasterizationState = &ras;
+    info.pMultisampleState   = &ms;
+    info.pDepthStencilState  = &ds;
+    info.pColorBlendState    = &blend;
+    info.pDynamicState       = &dyn;
+    info.layout              = g.skybox_layout;
+
+    VkResult res = vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE,
+                                             1, &info, NULL, &g.skybox_pipeline);
+    vkDestroyShaderModule(g.device, vmod, NULL);
+    vkDestroyShaderModule(g.device, fmod, NULL);
+    if (res != VK_SUCCESS) {
+        fprintf(stderr, "[render] skybox pipeline failed: %d\n", res);
+        return false;
+    }
+    return true;
+}
 
 static bool create_shadow_pipeline(void) {
     VkShaderModule vert;
@@ -2374,6 +2511,24 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     scissor.extent = g.extent;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    /* Skybox: draw before meshes with depth test ≤, no depth write. */
+    if (g.active_skybox < g.cubemap_count) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          g.skybox_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                g.skybox_layout, 0, 1,
+                                &g.skybox_sets[g.active_skybox], 0, NULL);
+        /* Push inv_proj + inv_view_rot (translation stripped). */
+        mat4_t inv_proj     = mat4_inverse(g.proj);
+        mat4_t view_rot     = g.view;
+        view_rot.m[12] = view_rot.m[13] = view_rot.m[14] = 0.0f;
+        mat4_t inv_view_rot = mat4_transpose(view_rot); /* orthogonal → transpose = inverse */
+        mat4_t sky_push[2]  = {inv_proj, inv_view_rot};
+        vkCmdPushConstants(cmd, g.skybox_layout, VK_SHADER_STAGE_VERTEX_BIT,
+                           0, 128, sky_push);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
+
     VkPipeline mesh_pipe = (g.wireframe && g.wireframe_pipeline)
                            ? g.wireframe_pipeline : g.pipeline;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_pipe);
@@ -2614,6 +2769,7 @@ bool render_init(window_t *window) {
         !create_device() || !create_swapchain() || !create_depth_resources() ||
         !create_render_targets() ||
         !create_material_infra() || !create_scene_infra() ||
+        !create_skybox_infra() ||
         !create_shadow_pipeline() ||
         !create_pipeline() || !create_inst_pipelines() ||
         !create_text_pipeline() || !create_commands_and_sync()) {
@@ -2971,6 +3127,149 @@ void render_set_material_normal_map(material_handle_t mat,
     vkUpdateDescriptorSets(g.device, 1, &write, 0, NULL);
 }
 
+cubemap_handle_t render_upload_cubemap(const uint8_t *faces[6],
+                                       uint32_t w, uint32_t h) {
+    if (g.cubemap_count >= MAX_CUBEMAPS || w == 0 || h == 0) {
+        fprintf(stderr, "[render] cubemap upload rejected\n");
+        return RENDER_CUBEMAP_INVALID;
+    }
+
+    VkDeviceSize face_size = (VkDeviceSize)w * h * 4;
+    VkDeviceSize total     = face_size * 6;
+    VkBuffer     staging; VkDeviceMemory staging_mem;
+    if (!create_buffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                           VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                       &staging, &staging_mem))
+        return RENDER_CUBEMAP_INVALID;
+
+    void *mapped;
+    vkMapMemory(g.device, staging_mem, 0, total, 0, &mapped);
+    for (int i = 0; i < 6; i++)
+        memcpy((uint8_t *)mapped + i * face_size, faces[i], (size_t)face_size);
+    vkUnmapMemory(g.device, staging_mem);
+
+    VkImageCreateInfo ici = {0};
+    ici.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ici.flags         = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    ici.imageType     = VK_IMAGE_TYPE_2D;
+    ici.format        = VK_FORMAT_R8G8B8A8_SRGB;
+    ici.extent        = (VkExtent3D){w, h, 1};
+    ici.mipLevels     = 1;
+    ici.arrayLayers   = 6;
+    ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    uint32_t idx = g.cubemap_count;
+    VkImage img; VkDeviceMemory mem;
+    if (vkCreateImage(g.device, &ici, NULL, &img) != VK_SUCCESS) goto fail;
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(g.device, img, &req);
+    uint32_t mtype;
+    if (!find_memory_type(req.memoryTypeBits,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &mtype))
+        goto fail_img;
+    VkMemoryAllocateInfo mai = {0};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = req.size; mai.memoryTypeIndex = mtype;
+    if (vkAllocateMemory(g.device, &mai, NULL, &mem) != VK_SUCCESS)
+        goto fail_img;
+    vkBindImageMemory(g.device, img, mem, 0);
+
+    {
+        VkCommandBuffer cmd = begin_single_time();
+        /* Transition all 6 layers to TRANSFER_DST */
+        VkImageMemoryBarrier bar = {0};
+        bar.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        bar.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+        bar.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.image               = img;
+        bar.subresourceRange    = (VkImageSubresourceRange){
+            VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+        bar.dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, NULL, 0, NULL, 1, &bar);
+
+        VkBufferImageCopy regions[6];
+        for (int f = 0; f < 6; f++) {
+            regions[f] = (VkBufferImageCopy){
+                .bufferOffset = (VkDeviceSize)f * face_size,
+                .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, (uint32_t)f, 1},
+                .imageExtent      = {w, h, 1},
+            };
+        }
+        vkCmdCopyBufferToImage(cmd, staging, img,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 6, regions);
+
+        bar.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        bar.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        bar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, NULL, 0, NULL, 1, &bar);
+        end_single_time(cmd);
+    }
+
+    VkImageViewCreateInfo vci = {0};
+    vci.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vci.image                           = img;
+    vci.viewType                        = VK_IMAGE_VIEW_TYPE_CUBE;
+    vci.format                          = VK_FORMAT_R8G8B8A8_SRGB;
+    vci.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    vci.subresourceRange.levelCount     = 1;
+    vci.subresourceRange.layerCount     = 6;
+    VkImageView view;
+    if (vkCreateImageView(g.device, &vci, NULL, &view) != VK_SUCCESS)
+        goto fail_mem;
+
+    /* Allocate and write a descriptor set for this cubemap. */
+    VkDescriptorSetAllocateInfo dsai = {0};
+    dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsai.descriptorPool     = g.skybox_pool;
+    dsai.descriptorSetCount = 1;
+    dsai.pSetLayouts        = &g.skybox_set_layout;
+    if (vkAllocateDescriptorSets(g.device, &dsai, &g.skybox_sets[idx]) != VK_SUCCESS)
+        goto fail_view;
+
+    VkDescriptorImageInfo dii = {g.skybox_sampler, view,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet wds = {0};
+    wds.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wds.dstSet          = g.skybox_sets[idx];
+    wds.dstBinding      = 0;
+    wds.descriptorCount = 1;
+    wds.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wds.pImageInfo      = &dii;
+    vkUpdateDescriptorSets(g.device, 1, &wds, 0, NULL);
+
+    g.cubemaps[idx].image  = img;
+    g.cubemaps[idx].memory = mem;
+    g.cubemaps[idx].view   = view;
+    vkDestroyBuffer(g.device, staging, NULL);
+    vkFreeMemory(g.device, staging_mem, NULL);
+    return g.cubemap_count++;
+
+fail_view: vkDestroyImageView(g.device, view, NULL);
+fail_mem:  vkFreeMemory(g.device, mem, NULL);
+fail_img:  vkDestroyImage(g.device, img, NULL);
+fail:
+    vkDestroyBuffer(g.device, staging, NULL);
+    vkFreeMemory(g.device, staging_mem, NULL);
+    return RENDER_CUBEMAP_INVALID;
+}
+
+void render_set_skybox(cubemap_handle_t cubemap) {
+    g.active_skybox = cubemap;
+}
+
+
 void render_draw(void) {
     /* Snapshot and clear the queues up front so they never accumulate across
        an early-return frame (e.g. resize). */
@@ -3165,6 +3464,17 @@ void render_shutdown(void) {
     }
     vkDestroyDescriptorPool(g.device, g.scene_pool, NULL);
     vkDestroyDescriptorSetLayout(g.device, g.scene_set_layout, NULL);
+
+    vkDestroyPipeline(g.device, g.skybox_pipeline, NULL);
+    vkDestroyPipelineLayout(g.device, g.skybox_layout, NULL);
+    vkDestroyDescriptorPool(g.device, g.skybox_pool, NULL);
+    vkDestroyDescriptorSetLayout(g.device, g.skybox_set_layout, NULL);
+    vkDestroySampler(g.device, g.skybox_sampler, NULL);
+    for (uint32_t i = 0; i < g.cubemap_count; i++) {
+        vkDestroyImageView(g.device, g.cubemaps[i].view, NULL);
+        vkDestroyImage(g.device, g.cubemaps[i].image, NULL);
+        vkFreeMemory(g.device, g.cubemaps[i].memory, NULL);
+    }
 
     vkDestroyPipeline(g.device, g.pp_composite_pipeline, NULL);
     vkDestroyPipeline(g.device, g.pp_blur_pipeline, NULL);

@@ -12,9 +12,11 @@
 typedef uint32_t mesh_handle_t;
 typedef uint32_t texture_handle_t;
 typedef uint32_t material_handle_t;
-#define RENDER_MESH_INVALID UINT32_MAX
-#define RENDER_TEXTURE_INVALID UINT32_MAX
+typedef uint32_t cubemap_handle_t;
+#define RENDER_MESH_INVALID     UINT32_MAX
+#define RENDER_TEXTURE_INVALID  UINT32_MAX
 #define RENDER_MATERIAL_INVALID UINT32_MAX
+#define RENDER_CUBEMAP_INVALID  UINT32_MAX
 
 /* Renderer: manages GPU resources and records one frame per render_draw call.
    The implementation is selected at build time via KILN_RENDERER (default:
@@ -111,6 +113,14 @@ bool render_get_wireframe(void);
 
 void render_set_vsync(bool enabled);
 bool render_get_vsync(void);
+
+/* Upload a cubemap from 6 RGBA8 face images (order: +X,-X,+Y,-Y,+Z,-Z).
+   All faces must be w×h pixels. Returns RENDER_CUBEMAP_INVALID on failure. */
+cubemap_handle_t render_upload_cubemap(const uint8_t *faces[6], uint32_t w, uint32_t h);
+
+/* Set the skybox drawn behind all geometry this frame (pass RENDER_CUBEMAP_INVALID
+   to disable). Persists until overwritten. */
+void render_set_skybox(cubemap_handle_t cubemap);
 
 /* Bloom post-processing. Default: enabled, threshold=0.8, strength=0.5,
    exposure=1.0 (Reinhard tone-mapping + gamma applied in composite). */

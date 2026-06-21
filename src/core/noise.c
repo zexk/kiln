@@ -30,7 +30,7 @@ static float grad(int hash, float x, float y) {
     return g[0] * x + g[1] * y;
 }
 
-float noise_perlin2d(float x, float y) {
+static float noise_perlin2d(float x, float y) {
     int xi = (int)floorf(x) & 255;
     int yi = (int)floorf(y) & 255;
     float xf = x - floorf(x);

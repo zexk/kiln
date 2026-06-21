@@ -4,17 +4,6 @@
 #include <string.h>
 #include <math.h>
 
-void voxel_upload_texture(R_Texture *tex, const Chunk *chunk) {
-    *tex = renderer_create_texture();
-    renderer_bind_texture(R_TEX_3D, *tex);
-    renderer_tex_param(R_TEX_3D, R_TEX_MIN_FILTER, R_TEX_NEAREST);
-    renderer_tex_param(R_TEX_3D, R_TEX_MAG_FILTER, R_TEX_NEAREST);
-    renderer_tex_param(R_TEX_3D, R_TEX_WRAP_S, R_TEX_CLAMP_TO_EDGE);
-    renderer_tex_param(R_TEX_3D, R_TEX_WRAP_T, R_TEX_CLAMP_TO_EDGE);
-    renderer_tex_param(R_TEX_3D, R_TEX_WRAP_R, R_TEX_CLAMP_TO_EDGE);
-    renderer_tex_image_3d(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, chunk->blocks);
-    renderer_bind_texture(R_TEX_3D, R_INVALID_HANDLE);
-}
 
 void chunk_init(Chunk *chunk, int x, int z) {
     chunk->x = x;

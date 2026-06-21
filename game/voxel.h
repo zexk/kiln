@@ -25,5 +25,4 @@ typedef struct {
 
 typedef struct { int x, y, z; } BlockPos;
 
-void voxel_upload_texture(R_Texture *tex, const Chunk *chunk);
 void chunk_init(Chunk *chunk, int x, int z);

@@ -214,7 +214,6 @@ void world_init(World *world, int render_distance) {
     world->capacity            = (2 * MAX_RENDER_DISTANCE + 1) * (2 * MAX_RENDER_DISTANCE + 1);
     world->chunks              = calloc(world->capacity, sizeof(LoadedChunk));
     world->count               = 0;
-    world->mesh_compute_program = R_INVALID_HANDLE;
     ensure_save_dirs();
 }
 
@@ -238,10 +237,6 @@ static void load_chunk(World *world, int x, int z) {
             load_chunk_data(world->chunks[i].chunk);
             world->chunks[i].mesh = malloc(sizeof(Mesh));
             mesh_init(world->chunks[i].mesh);
-            world->chunks[i].voxel_tex = R_INVALID_HANDLE;
-            /* voxel_upload_texture only needed for GPU compute meshing */
-            if (world->mesh_compute_program != R_INVALID_HANDLE)
-                voxel_upload_texture(&world->chunks[i].voxel_tex, world->chunks[i].chunk);
             mesh_generate_greedy(world->chunks[i].mesh, world->chunks[i].chunk);
             mesh_upload(world->chunks[i].mesh);
             world->chunks[i].active = true;
@@ -261,8 +256,6 @@ static void unload_chunk(World *world, int index) {
               world->chunks[index].chunk->x, world->chunks[index].chunk->z);
     mesh_free(world->chunks[index].mesh); free(world->chunks[index].mesh);
     free(world->chunks[index].chunk);
-    if (world->chunks[index].voxel_tex != R_INVALID_HANDLE)
-        renderer_destroy_texture(world->chunks[index].voxel_tex);
     world->chunks[index].active = false;
     world->count--;
 }

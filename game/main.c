@@ -341,8 +341,7 @@ int main(void) {
                 float vel = cm->speed * (float)dt;
                 if (game_input.keys[0xe1]) vel *= 6.0f; /* Shift */
                 if (vel > 0.3f) vel = 0.3f;
-                vec3 right, up_unused;
-                fps_camera_basis(&camera, &right, &up_unused);
+                vec3 right = vec3_normalize(vec3_cross(camera.front, camera.up));
                 vec3 move = {0.0f, 0.0f, 0.0f};
                 if (game_input.keys['w']) move = vec3_add(move, camera.front);
                 if (game_input.keys['s']) move = vec3_sub(move, camera.front);

@@ -5,12 +5,11 @@
 #include "math3d.h"
 
 typedef struct {
-    Chunk     *chunk;
-    Mesh      *mesh;
-    bool       active;
-    bool       dirty;
-    bool       save_dirty;
-    R_Texture  voxel_tex;
+    Chunk *chunk;
+    Mesh  *mesh;
+    bool   active;
+    bool   dirty;
+    bool   save_dirty;
 } LoadedChunk;
 
 typedef struct World {
@@ -18,7 +17,6 @@ typedef struct World {
     int          capacity;
     int          count;
     int          render_distance;
-    R_Program    mesh_compute_program;
 } World;
 
 void      world_init(World *world, int render_distance);

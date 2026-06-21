@@ -83,6 +83,8 @@ typedef struct {
     bool auto_rotate;
     float spin_speed;
     float bg_color[3];
+    bool  vsync;      /* mirrors the renderer present mode */
+    float fps_limit;  /* Hz; 0 = unlimited */
 
     /* directional light, set each frame from these spherical coordinates */
     float light_yaw;         /* degrees: horizontal rotation of the sun */

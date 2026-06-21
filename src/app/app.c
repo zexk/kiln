@@ -203,6 +203,8 @@ bool app_init(app_t *app) {
     app->selected = ECS_ENTITY_NULL;
     app->sel_prototype = 0;
     app->spin_speed = 0.6f;
+    app->vsync      = true;
+    app->fps_limit  = 0.0f;
     app->bg_color[0] = 0.02f;
     app->bg_color[1] = 0.02f;
     app->bg_color[2] = 0.05f;
@@ -597,10 +599,17 @@ static void build_ui(app_t *app) {
     ui_begin(&app->ui, &in, (float)w, (float)h, &g_kln_ui_draw);
     ui_panel_begin(&app->ui, 12.0f, 12.0f, 300.0f);
 
+    float target_ms = app->fps_limit > 0.0f
+                      ? 1000.0f / app->fps_limit : 1000.0f / 60.0f;
     ui_graph(&app->ui, "frame ms",
              app->frame_ms, APP_FRAME_SAMPLES, app->frame_ms_head,
-             50.0f, 1000.0f / 60.0f);
+             50.0f, target_ms);
     ui_text(&app->ui, "%.0f fps  draws %u", (double)app->fps, app->draw_count);
+
+    bool prev_vsync = app->vsync;
+    ui_checkbox(&app->ui, "vsync", &app->vsync);
+    if (app->vsync != prev_vsync) render_set_vsync(app->vsync);
+    ui_slider_float(&app->ui, "fps limit", &app->fps_limit, 0.0f, 240.0f);
     ui_text(&app->ui, "cam  y%.0f p%.0f d%.1f",
             (double)kln_degrees(app->camera.yaw),
             (double)kln_degrees(app->camera.pitch),
@@ -795,6 +804,12 @@ void app_run(app_t *app) {
         update_gizmo(app);
         build_ui(app);
         render_draw();
+
+        if (app->fps_limit > 0.0f) {
+            double target  = 1.0 / (double)app->fps_limit;
+            double elapsed = kln_timer_elapsed(&frame_timer);
+            if (elapsed < target) kln_timer_sleep(target - elapsed);
+        }
 
         if (max_frames && ++frames >= max_frames) {
             running = false;

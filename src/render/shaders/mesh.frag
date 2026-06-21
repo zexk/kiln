@@ -21,21 +21,24 @@ struct PointLight {
 };
 
 layout(set = 1, binding = 0) uniform SceneUBO {
-    vec4       light_dir;    /* xyz: dir, w: point_light_count */
+    vec4       light_dir;          /* xyz: dir, w: point_light_count */
     vec4       light_color;
     vec4       ambient_color;
     vec4       view_pos;
-    mat4       light_vp;
+    mat4       light_vp[3];        /* cascaded shadow map VPs */
+    vec4       cascade_splits;     /* xyz: camera-distance split planes */
     PointLight point_lights[8];
 } scene;
-layout(set = 1, binding = 1) uniform sampler2DShadow shadow_map;
+layout(set = 1, binding = 1) uniform sampler2DArrayShadow shadow_map;
 
-float pcf_shadow(vec3 proj) {
-    vec2 texel = 1.0 / vec2(textureSize(shadow_map, 0));
+float pcf_shadow(vec3 proj, int cascade) {
+    vec2 texel = 1.0 / vec2(textureSize(shadow_map, 0).xy);
     float s = 0.0;
     for (int x = -1; x <= 1; x++)
         for (int y = -1; y <= 1; y++)
-            s += texture(shadow_map, vec3(proj.xy + vec2(x, y) * texel, proj.z - 0.002));
+            s += texture(shadow_map,
+                         vec4(proj.xy + vec2(x,y)*texel, float(cascade),
+                              proj.z - 0.002));
     return s / 9.0;
 }
 
@@ -48,17 +51,22 @@ void main() {
     vec3 n   = normalize(tbn * tn);
     vec3 v   = normalize(scene.view_pos.xyz - frag_world_pos);
 
-    /* Directional light + PCF shadow. */
+    /* Select cascade by camera-fragment distance. */
+    float dist = length(scene.view_pos.xyz - frag_world_pos);
+    int cascade = (dist < scene.cascade_splits.x) ? 0 :
+                  (dist < scene.cascade_splits.y) ? 1 : 2;
+
+    /* Directional light + PCF shadow from selected cascade. */
     vec3  l    = normalize(scene.light_dir.xyz);
     vec3  h    = normalize(l + v);
     float ndl  = dot(n, l);
     float diff = abs(ndl);
     float spec = max(ndl, 0.0) * pow(max(dot(n, h), 0.0), 32.0);
 
-    vec4  lc     = scene.light_vp * vec4(frag_world_pos, 1.0);
+    vec4  lc     = scene.light_vp[cascade] * vec4(frag_world_pos, 1.0);
     vec3  proj   = lc.xyz / lc.w;
     proj.xy      = proj.xy * 0.5 + 0.5;
-    float shadow = (proj.z > 1.0) ? 1.0 : pcf_shadow(proj);
+    float shadow = (proj.z > 1.0) ? 1.0 : pcf_shadow(proj, cascade);
 
     vec3 base  = mat.base_color.rgb * texture(albedo, frag_uv).rgb;
     vec3 color = base  * (shadow * diff * scene.light_color.rgb + scene.ambient_color.rgb)

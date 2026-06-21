@@ -91,15 +91,17 @@ typedef struct {
 } point_light_ubo_t;
 
 /* Per-frame scene uniform (std140).
-   light_dir.w  = active point-light count (int cast to float).
-   light_vp     = mat4 for directional shadow mapping (64 bytes).
-   point_lights = up to RENDER_MAX_POINT_LIGHTS entries × 48 bytes each. */
+   light_dir.w      = active point-light count.
+   light_vp[3]      = 3 cascade light view-projection matrices (192 bytes).
+   cascade_splits   = xyz: camera-distance split planes (world units).
+   point_lights     = up to RENDER_MAX_POINT_LIGHTS × 48 bytes. */
 typedef struct {
     float light_dir[4];
     float light_color[4];
     float ambient_color[4];
     float view_pos[4];
-    float light_vp[16];
+    float light_vp[3][16];   /* 3 cascades × mat4 */
+    float cascade_splits[4]; /* xyz = near split planes, w = unused */
     point_light_ubo_t point_lights[RENDER_MAX_POINT_LIGHTS];
 } scene_ubo_t;
 
@@ -162,7 +164,8 @@ static struct {
     /* Shadow map: depth image rendered from the light's perspective. */
     VkImage          shadow_image;
     VkDeviceMemory   shadow_memory;
-    VkImageView      shadow_view;
+    VkImageView      shadow_view;            /* array view: all 3 layers, for sampling */
+    VkImageView      shadow_layer_view[3];   /* single-layer views: for rendering */
     VkSampler        shadow_sampler; /* comparison sampler (LESS_OR_EQUAL) */
     VkPipelineLayout shadow_layout;
     VkPipeline       shadow_pipeline;
@@ -1157,14 +1160,14 @@ static bool create_scene_infra(void) {
         .ambient_color = {0.16f,  0.18f,  0.24f,  0.0f},
     };
 
-    /* --- shadow map image + view --- */
+    /* --- cascade shadow map: 3-layer depth array --- */
     VkImageCreateInfo shadow_img = {0};
     shadow_img.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     shadow_img.imageType     = VK_IMAGE_TYPE_2D;
     shadow_img.format        = VK_FORMAT_D32_SFLOAT;
     shadow_img.extent        = (VkExtent3D){SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 1};
     shadow_img.mipLevels     = 1;
-    shadow_img.arrayLayers   = 1;
+    shadow_img.arrayLayers   = 3; /* one per cascade */
     shadow_img.samples       = VK_SAMPLE_COUNT_1_BIT;
     shadow_img.tiling        = VK_IMAGE_TILING_OPTIMAL;
     shadow_img.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
@@ -1176,9 +1179,8 @@ static bool create_scene_infra(void) {
     vkGetImageMemoryRequirements(g.device, g.shadow_image, &sreq);
     uint32_t stype;
     if (!find_memory_type(sreq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                          &stype)) {
+                          &stype))
         return false;
-    }
     VkMemoryAllocateInfo salloc = {0};
     salloc.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     salloc.allocationSize  = sreq.size;
@@ -1186,15 +1188,26 @@ static bool create_scene_infra(void) {
     VK_CHECK(vkAllocateMemory(g.device, &salloc, NULL, &g.shadow_memory));
     VK_CHECK(vkBindImageMemory(g.device, g.shadow_image, g.shadow_memory, 0));
 
+    /* Sampling view: all 3 layers as a 2D array (for sampler2DArrayShadow). */
     VkImageViewCreateInfo svci = {0};
     svci.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     svci.image                           = g.shadow_image;
-    svci.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+    svci.viewType                        = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     svci.format                          = VK_FORMAT_D32_SFLOAT;
     svci.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
     svci.subresourceRange.levelCount     = 1;
-    svci.subresourceRange.layerCount     = 1;
+    svci.subresourceRange.layerCount     = 3;
     VK_CHECK(vkCreateImageView(g.device, &svci, NULL, &g.shadow_view));
+
+    /* Per-layer render views (single layer each, for vkCmdBeginRendering). */
+    for (uint32_t i = 0; i < 3; i++) {
+        VkImageViewCreateInfo lci = svci;
+        lci.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+        lci.subresourceRange.baseArrayLayer = i;
+        lci.subresourceRange.layerCount     = 1;
+        VK_CHECK(vkCreateImageView(g.device, &lci, NULL,
+                                   &g.shadow_layer_view[i]));
+    }
 
     /* --- comparison sampler for sampler2DShadow --- */
     VkSamplerCreateInfo samp = {0};
@@ -2364,96 +2377,125 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     /* Shadow pass: render scene depth from the light's perspective.        */
     /* ------------------------------------------------------------------ */
 
-    /* Compute light view-projection (ortho, centered at camera position). */
-    vec3_t view_pos  = {g.scene_data.view_pos[0],
-                        g.scene_data.view_pos[1],
-                        g.scene_data.view_pos[2]};
+    /* Compute 3 cascade light view-projections. */
+    vec3_t view_pos = {g.scene_data.view_pos[0],
+                       g.scene_data.view_pos[1],
+                       g.scene_data.view_pos[2]};
     vec3_t ld = {g.scene_data.light_dir[0],
                  g.scene_data.light_dir[1],
                  g.scene_data.light_dir[2]};
-    vec3_t light_eye = vec3_add(view_pos, vec3_scale(ld, 50.0f));
     vec3_t world_up  = (fabsf(ld.y) > 0.99f)
                        ? (vec3_t){0.0f, 0.0f, 1.0f}
                        : (vec3_t){0.0f, 1.0f, 0.0f};
-    mat4_t light_view = mat4_look_at(light_eye, view_pos, world_up);
-    float  sz         = 40.0f;
-    mat4_t light_proj = mat4_ortho(-sz, sz, -sz, sz, 1.0f, 200.0f);
-    mat4_t light_vp   = mat4_mul(light_proj, light_view);
-    memcpy(g.scene_data.light_vp, light_vp.m, sizeof(light_vp.m));
+    /* Each cascade uses an ortho box sized to its split radius. */
+    const float cascade_sz[3] = {25.0f, 60.0f, 220.0f};
+    mat4_t cascade_vp[3];
+    for (int c = 0; c < 3; c++) {
+        float sz   = cascade_sz[c];
+        vec3_t eye = vec3_add(view_pos, vec3_scale(ld, sz * 0.8f));
+        mat4_t lv  = mat4_look_at(eye, view_pos, world_up);
+        mat4_t lp  = mat4_ortho(-sz, sz, -sz, sz, 1.0f, sz * 4.0f);
+        cascade_vp[c] = mat4_mul(lp, lv);
+        memcpy(g.scene_data.light_vp[c], cascade_vp[c].m,
+               sizeof(cascade_vp[c].m));
+    }
 
-    image_barrier(cmd, g.shadow_image, VK_IMAGE_ASPECT_DEPTH_BIT,
-                  VK_IMAGE_LAYOUT_UNDEFINED,
-                  VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, 0,
-                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT);
-
-    VkRenderingAttachmentInfo shadow_depth = {0};
-    shadow_depth.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    shadow_depth.imageView   = g.shadow_view;
-    shadow_depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    shadow_depth.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    shadow_depth.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-    shadow_depth.clearValue.depthStencil.depth = 1.0f;
-
-    VkRenderingInfo shadow_pass = {0};
-    shadow_pass.sType             = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    shadow_pass.renderArea.extent = (VkExtent2D){SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
-    shadow_pass.layerCount        = 1;
-    shadow_pass.pDepthAttachment  = &shadow_depth;
-    vkCmdBeginRendering(cmd, &shadow_pass);
-
-    VkViewport shadow_vp = {0.0f, 0.0f,
-                            (float)SHADOW_MAP_SIZE, (float)SHADOW_MAP_SIZE,
-                            0.0f, 1.0f};
-    vkCmdSetViewport(cmd, 0, 1, &shadow_vp);
-    VkRect2D shadow_scissor = {{0, 0}, {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE}};
-    vkCmdSetScissor(cmd, 0, 1, &shadow_scissor);
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g.shadow_pipeline);
-
-    /* Upload instance models to the GPU buffer (used by both shadow and colour). */
+    /* Upload instance models before the shadow passes. */
     if (inst_model_count > 0)
         memcpy(g.inst_vmapped[g.frame], g.inst_models,
                sizeof(mat4_t) * inst_model_count);
 
-    for (uint32_t i = 0; i < instance_count; i++) {
-        const mesh_instance_t *inst = &g.instances[i];
-        const gpu_mesh_t *mesh      = &g.meshes[inst->mesh];
-        mat4_t light_mvp = mat4_mul(light_vp, inst->model);
-        vkCmdPushConstants(cmd, g.shadow_layout, VK_SHADER_STAGE_VERTEX_BIT,
-                           0, sizeof(mat4_t), &light_mvp);
-        VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertex_buffer, &offset);
-        vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, mesh->index_count, 1, 0, 0, 0);
+    /* Transition entire shadow array to depth-attachment for rendering. */
+    {
+        VkImageMemoryBarrier bar = {0};
+        bar.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        bar.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+        bar.newLayout           = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.image               = g.shadow_image;
+        bar.subresourceRange    = (VkImageSubresourceRange){
+            VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 3};
+        bar.dstAccessMask       = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            0, 0, NULL, 0, NULL, 1, &bar);
     }
-    /* Instanced shadow draws: one push (light_vp) covers all batches. */
-    if (inst_batch_count > 0) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          g.shadow_inst_pipeline);
-        vkCmdPushConstants(cmd, g.shadow_layout, VK_SHADER_STAGE_VERTEX_BIT,
-                           0, sizeof(mat4_t), &light_vp);
-        for (uint32_t b = 0; b < inst_batch_count; b++) {
-            const inst_batch_t *batch = &g.inst_batches[b];
-            const gpu_mesh_t   *mesh  = &g.meshes[batch->mesh];
-            VkBuffer   vbufs[2]   = {mesh->vertex_buffer, g.inst_vbuf[g.frame]};
-            VkDeviceSize offs[2]  = {0, (VkDeviceSize)batch->first * sizeof(mat4_t)};
-            vkCmdBindVertexBuffers(cmd, 0, 2, vbufs, offs);
-            vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(cmd, mesh->index_count, batch->count, 0, 0, 0);
-        }
-    }
-    vkCmdEndRendering(cmd);
 
-    /* Transition shadow map to shader-readable before the color pass. */
-    image_barrier(cmd, g.shadow_image, VK_IMAGE_ASPECT_DEPTH_BIT,
-                  VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                  VK_ACCESS_SHADER_READ_BIT,
-                  VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    /* Render 3 cascades, each into its own layer. */
+    VkViewport shadow_vp = {0.0f, 0.0f,
+                            (float)SHADOW_MAP_SIZE, (float)SHADOW_MAP_SIZE,
+                            0.0f, 1.0f};
+    VkRect2D shadow_scissor = {{0, 0}, {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE}};
+
+    for (int c = 0; c < 3; c++) {
+        VkRenderingAttachmentInfo shadow_depth = {0};
+        shadow_depth.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        shadow_depth.imageView   = g.shadow_layer_view[c];
+        shadow_depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        shadow_depth.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        shadow_depth.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        shadow_depth.clearValue.depthStencil.depth = 1.0f;
+
+        VkRenderingInfo sr = {0};
+        sr.sType             = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        sr.renderArea.extent = (VkExtent2D){SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
+        sr.layerCount        = 1;
+        sr.pDepthAttachment  = &shadow_depth;
+        vkCmdBeginRendering(cmd, &sr);
+        vkCmdSetViewport(cmd, 0, 1, &shadow_vp);
+        vkCmdSetScissor(cmd, 0, 1, &shadow_scissor);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          g.shadow_pipeline);
+        for (uint32_t i = 0; i < instance_count; i++) {
+            const mesh_instance_t *inst = &g.instances[i];
+            const gpu_mesh_t *mesh      = &g.meshes[inst->mesh];
+            mat4_t lmvp = mat4_mul(cascade_vp[c], inst->model);
+            vkCmdPushConstants(cmd, g.shadow_layout, VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(mat4_t), &lmvp);
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertex_buffer, &offset);
+            vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, mesh->index_count, 1, 0, 0, 0);
+        }
+        if (inst_batch_count > 0) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              g.shadow_inst_pipeline);
+            vkCmdPushConstants(cmd, g.shadow_layout, VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(mat4_t), &cascade_vp[c]);
+            for (uint32_t b = 0; b < inst_batch_count; b++) {
+                const inst_batch_t *batch = &g.inst_batches[b];
+                const gpu_mesh_t   *mesh  = &g.meshes[batch->mesh];
+                VkBuffer   vbufs[2]  = {mesh->vertex_buffer, g.inst_vbuf[g.frame]};
+                VkDeviceSize offs[2] = {0, (VkDeviceSize)batch->first * sizeof(mat4_t)};
+                vkCmdBindVertexBuffers(cmd, 0, 2, vbufs, offs);
+                vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, mesh->index_count, batch->count, 0, 0, 0);
+            }
+        }
+        vkCmdEndRendering(cmd);
+    }
+
+    /* Transition entire shadow array to shader-readable. */
+    {
+        VkImageMemoryBarrier bar = {0};
+        bar.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        bar.oldLayout           = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        bar.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.image               = g.shadow_image;
+        bar.subresourceRange    = (VkImageSubresourceRange){
+            VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 3};
+        bar.srcAccessMask       = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        bar.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, NULL, 0, NULL, 1, &bar);
+    }
 
     /* ------------------------------------------------------------------ */
     /* HDR scene pass  →  g.color_image                                    */
@@ -2764,6 +2806,10 @@ bool render_init(window_t *window) {
     g.bloom_threshold = 0.8f;
     g.bloom_strength  = 0.5f;
     g.bloom_exposure  = 1.0f;
+    /* Default cascade split distances (camera-to-fragment, world units). */
+    g.scene_data.cascade_splits[0] = 20.0f;
+    g.scene_data.cascade_splits[1] = 50.0f;
+    g.scene_data.cascade_splits[2] = 200.0f;
 
     if (!create_instance() || !create_surface() || !pick_physical_device() ||
         !create_device() || !create_swapchain() || !create_depth_resources() ||
@@ -3487,6 +3533,9 @@ void render_shutdown(void) {
     vkDestroyPipeline(g.device, g.shadow_pipeline, NULL);
     vkDestroyPipelineLayout(g.device, g.shadow_layout, NULL);
     vkDestroySampler(g.device, g.shadow_sampler, NULL);
+    for (uint32_t i = 0; i < 3; i++)
+        if (g.shadow_layer_view[i])
+            vkDestroyImageView(g.device, g.shadow_layer_view[i], NULL);
     vkDestroyImageView(g.device, g.shadow_view, NULL);
     vkDestroyImage(g.device, g.shadow_image, NULL);
     vkFreeMemory(g.device, g.shadow_memory, NULL);

@@ -597,32 +597,35 @@ static void build_ui(app_t *app) {
     ui_begin(&app->ui, &in, (float)w, (float)h, &g_kln_ui_draw);
     ui_panel_begin(&app->ui, 12.0f, 12.0f, 300.0f);
 
-    ui_text(&app->ui, "KILN  %.0f FPS  %.2f MS", (double)app->fps,
+    ui_text(&app->ui, "kiln  %.0f fps  %.2f ms", (double)app->fps,
             app->fps > 0.0f ? 1000.0 / (double)app->fps : 0.0);
-    ui_text(&app->ui, "DRAWS %u", app->draw_count);
-    ui_text(&app->ui, "CAM  Y%.0f P%.0f D%.1f",
+    ui_text(&app->ui, "draws %u", app->draw_count);
+    ui_text(&app->ui, "cam  y%.0f p%.0f d%.1f",
             (double)kln_degrees(app->camera.yaw),
             (double)kln_degrees(app->camera.pitch),
             (double)app->camera.distance);
 
-    ui_checkbox(&app->ui, "AUTO ROTATE", &app->auto_rotate);
-    ui_slider_float(&app->ui, "SPIN", &app->spin_speed, 0.0f, 3.0f);
+    ui_separator(&app->ui);
 
-    ui_slider_float(&app->ui, "BG R", &app->bg_color[0], 0.0f, 1.0f);
-    ui_slider_float(&app->ui, "BG G", &app->bg_color[1], 0.0f, 1.0f);
-    ui_slider_float(&app->ui, "BG B", &app->bg_color[2], 0.0f, 1.0f);
-
-    if (ui_button(&app->ui, "RESET CAMERA")) {
+    ui_checkbox(&app->ui, "auto rotate", &app->auto_rotate);
+    ui_slider_float(&app->ui, "spin", &app->spin_speed, 0.0f, 3.0f);
+    ui_slider_float(&app->ui, "bg r", &app->bg_color[0], 0.0f, 1.0f);
+    ui_slider_float(&app->ui, "bg g", &app->bg_color[1], 0.0f, 1.0f);
+    ui_slider_float(&app->ui, "bg b", &app->bg_color[2], 0.0f, 1.0f);
+    if (ui_button(&app->ui, "reset camera")) {
         camera_init(&app->camera);
         app->camera.distance = 16.0f;
         app->camera.pitch = kln_radians(18.0f);
     }
 
-    /* --- lighting --- */
-    ui_slider_float(&app->ui, "SUN YAW",   &app->light_yaw,         0.0f, 360.0f);
-    ui_slider_float(&app->ui, "SUN PITCH", &app->light_pitch,        0.0f,  90.0f);
-    ui_slider_float(&app->ui, "LIGHT",     &app->light_intensity,    0.0f,   2.0f);
-    ui_slider_float(&app->ui, "AMBIENT",   &app->ambient_intensity,  0.0f,   2.0f);
+    ui_separator(&app->ui);
+
+    ui_slider_float(&app->ui, "sun yaw",   &app->light_yaw,        0.0f, 360.0f);
+    ui_slider_float(&app->ui, "sun pitch", &app->light_pitch,       0.0f,  90.0f);
+    ui_slider_float(&app->ui, "light",     &app->light_intensity,   0.0f,   2.0f);
+    ui_slider_float(&app->ui, "ambient",   &app->ambient_intensity, 0.0f,   2.0f);
+
+    ui_separator(&app->ui);
 
     /* --- crude level editor: add / select / remove --- */
     if (app->selected != ECS_ENTITY_NULL &&
@@ -632,30 +635,30 @@ static void build_ui(app_t *app) {
     entity_t ents[256];
     int ecount = collect_entities(app, ents, 256);
 
-    ui_text(&app->ui, "ENTITIES %d", ecount);
+    ui_progress(&app->ui, "entities", (float)ecount, 256.0f);
     if (app->prototype_count > 0) {
-        ui_text(&app->ui, "SPAWN: %s",
+        ui_text(&app->ui, "spawn: %s",
                 app->prototypes[app->sel_prototype].name);
-        if (ui_button(&app->ui, "CYCLE MESH")) {
+        if (ui_button(&app->ui, "cycle mesh")) {
             app->sel_prototype =
                 (app->sel_prototype + 1) % app->prototype_count;
         }
         /* Spawn at the orbit target — pan the camera to place where it lands. */
-        if (ui_button(&app->ui, "ADD AT TARGET")) {
+        if (ui_button(&app->ui, "add at target")) {
             app->selected = spawn(app, app->sel_prototype, app->camera.target);
         }
     }
 
-    ui_text(&app->ui, "SEL: %s", selected_name(app));
+    ui_text(&app->ui, "sel: %s", selected_name(app));
     if (app->selected != ECS_ENTITY_NULL) {
-        static const char *modes[] = {"MOVE", "ROTATE", "SCALE"};
+        static const char *modes[] = {"move", "rotate", "scale"};
         char label[32];
-        snprintf(label, sizeof(label), "GIZMO: %s", modes[app->gizmo.mode]);
+        snprintf(label, sizeof(label), "gizmo: %s", modes[app->gizmo.mode]);
         if (ui_button(&app->ui, label)) {
             app->gizmo.mode = (gizmo_mode_t)(((int)app->gizmo.mode + 1) % 3);
         }
     }
-    if (ui_button(&app->ui, "SELECT NEXT") && ecount > 0) {
+    if (ui_button(&app->ui, "select next") && ecount > 0) {
         int cur = -1;
         for (int i = 0; i < ecount; i++) {
             if (ents[i] == app->selected) {
@@ -665,19 +668,16 @@ static void build_ui(app_t *app) {
         }
         app->selected = ents[(cur + 1) % ecount];
     }
-    if (ui_button(&app->ui, "REMOVE") &&
+    if (ui_button(&app->ui, "remove") &&
         app->selected != ECS_ENTITY_NULL) {
         entity_destroy(app->world, app->selected);
         app->selected = ECS_ENTITY_NULL;
     }
 
-    /* --- scene persistence --- */
-    if (ui_button(&app->ui, "SAVE SCENE")) {
-        scene_do_save(app);
-    }
-    if (ui_button(&app->ui, "LOAD SCENE")) {
-        scene_do_load(app);
-    }
+    ui_separator(&app->ui);
+
+    if (ui_button(&app->ui, "save scene")) { scene_do_save(app); }
+    if (ui_button(&app->ui, "load scene")) { scene_do_load(app); }
     if (app->scene_status[0]) {
         ui_text(&app->ui, "%s", app->scene_status);
     }

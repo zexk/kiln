@@ -1,17 +1,17 @@
 #pragma once
 
-#include "ecs.h"
+#include "ecs.h"      /* kiln: world_t, entity_t, component_id_t */
 #include "math3d.h"
 #include "voxel.h"
 #include <stdbool.h>
 
-extern int COMP_TRANSFORM;
-extern int COMP_BLOCK_DEF;
-extern int COMP_MOVEMENT;
-extern int COMP_HEALTH;
+extern component_id_t COMP_TRANSFORM;
+extern component_id_t COMP_BLOCK_DEF;
+extern component_id_t COMP_MOVEMENT;
+extern component_id_t COMP_HEALTH;
 
-extern ECS    g_ecs;
-extern Entity g_block_entities[256];
+extern world_t  *g_ecs;
+extern entity_t  g_block_entities[256];
 
 typedef struct {
     vec3  position;
@@ -46,8 +46,8 @@ typedef struct {
     float max;
 } C_Health;
 
-void   components_init(ECS *ecs);
-Entity register_block_type(ECS *ecs, BlockType type, const char *id, const char *name,
-                           bool solid, bool opaque, float hardness,
-                           const char *tex_path, const char *tex_top,
-                           const char *tex_bottom, const char *tex_side);
+void     components_init(world_t *world);
+entity_t register_block_type(world_t *world, BlockType type, const char *id, const char *name,
+                             bool solid, bool opaque, float hardness,
+                             const char *tex_path, const char *tex_top,
+                             const char *tex_bottom, const char *tex_side);

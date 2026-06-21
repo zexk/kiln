@@ -44,8 +44,8 @@ static void add_vertex(Mesh *mesh, float x, float y, float z,
 }
 
 static int get_texture_layer(BlockType type, int face) {
-    Entity e = g_block_entities[type];
-    C_BlockDef *def = ecs_get(&g_ecs, e, COMP_BLOCK_DEF);
+    entity_t e = g_block_entities[type];
+    C_BlockDef *def = entity_get_component(g_ecs, e, COMP_BLOCK_DEF);
     if (!def) return 0;
     switch (face) {
     case 4:  return def->layer_top    >= 0 ? def->layer_top    : def->layer_default;
@@ -55,8 +55,8 @@ static int get_texture_layer(BlockType type, int face) {
 }
 
 static bool is_opaque(BlockType type) {
-    Entity e = g_block_entities[type];
-    C_BlockDef *def = ecs_get(&g_ecs, e, COMP_BLOCK_DEF);
+    entity_t e = g_block_entities[type];
+    C_BlockDef *def = entity_get_component(g_ecs, e, COMP_BLOCK_DEF);
     return def && def->opaque;
 }
 

@@ -1,16 +1,19 @@
 #include "systems.h"
 #include "components.h"
-#include "camera.h"
+#include "query.h"
+#include "signature.h"
 #include "logger.h"
 #include <math.h>
 
-void sys_movement(ECS *ecs, World *world, float dt) {
-    for (Entity e = 1; e < (Entity)ecs->max_entities; e++) {
-        if (!ecs_alive(ecs, e)) continue;
-        if (!ecs_has(ecs, e, COMP_TRANSFORM) || !ecs_has(ecs, e, COMP_MOVEMENT)) continue;
-        C_Transform *transform = ecs_get(ecs, e, COMP_TRANSFORM);
-        C_Movement  *movement  = ecs_get(ecs, e, COMP_MOVEMENT);
-        if (!transform || !movement) continue;
+void sys_movement(world_t *ecs, World *world, float dt) {
+    signature_t sig;
+    signature_clear(&sig);
+    signature_set(&sig, COMP_TRANSFORM);
+    signature_set(&sig, COMP_MOVEMENT);
+    query_iter_t it = query_iter(ecs, (query_desc_t){.require = sig});
+    while (query_next(&it)) {
+        C_Transform *transform = query_get(&it, COMP_TRANSFORM);
+        C_Movement  *movement  = query_get(&it, COMP_MOVEMENT);
 
         movement->velocity.y -= GRAVITY * dt;
         transform->position.y += movement->velocity.y * dt;

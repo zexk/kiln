@@ -54,18 +54,48 @@ static void chunk_save_path(char *out, size_t n, int x, int z) {
 }
 
 static const char *block_id_for_type(BlockType type) {
-    Entity e = g_block_entities[type];
-    C_BlockDef *d = e ? ecs_get(&g_ecs, e, COMP_BLOCK_DEF) : NULL;
+    entity_t e = g_block_entities[type];
+    C_BlockDef *d = (e != ECS_ENTITY_NULL) ? entity_get_component(g_ecs, e, COMP_BLOCK_DEF) : NULL;
     return (d && d->id) ? d->id : "kyub:air";
 }
 
 static BlockType block_type_for_id(const char *id) {
     for (int t = 0; t < 256; t++) {
-        Entity e = g_block_entities[t];
-        C_BlockDef *d = e ? ecs_get(&g_ecs, e, COMP_BLOCK_DEF) : NULL;
+        entity_t e = g_block_entities[t];
+        C_BlockDef *d = (e != ECS_ENTITY_NULL) ? entity_get_component(g_ecs, e, COMP_BLOCK_DEF) : NULL;
         if (d && d->id && strcmp(d->id, id) == 0) return (BlockType)t;
     }
     return BLOCK_AIR;
+}
+
+bool position_is_safe(const World *world, vec3 pos) {
+    float hw    = PLAYER_HALF_WIDTH;
+    float min_x = pos.x - hw, max_x = pos.x + hw;
+    float min_z = pos.z - hw, max_z = pos.z + hw;
+    float min_y = pos.y - PLAYER_EYES_HEIGHT + 0.01f;
+    float max_y = pos.y + (PLAYER_HEIGHT - PLAYER_EYES_HEIGHT) - 0.01f;
+    for (int y = (int)floorf(min_y); y <= (int)floorf(max_y); y++) {
+        if (world_is_solid(world, (int)floorf(min_x), y, (int)floorf(min_z))) return false;
+        if (world_is_solid(world, (int)floorf(min_x), y, (int)floorf(max_z))) return false;
+        if (world_is_solid(world, (int)floorf(max_x), y, (int)floorf(min_z))) return false;
+        if (world_is_solid(world, (int)floorf(max_x), y, (int)floorf(max_z))) return false;
+    }
+    return true;
+}
+
+bool player_collides_with_block(const World *world, vec3 player_pos, BlockPos block) {
+    (void)world;
+    float hw     = PLAYER_HALF_WIDTH;
+    float p_minx = player_pos.x - hw,        p_maxx = player_pos.x + hw;
+    float p_minz = player_pos.z - hw,        p_maxz = player_pos.z + hw;
+    float p_miny = player_pos.y - PLAYER_EYES_HEIGHT;
+    float p_maxy = player_pos.y + (PLAYER_HEIGHT - PLAYER_EYES_HEIGHT);
+    float b_minx = (float)block.x,           b_maxx = (float)block.x + 1.0f;
+    float b_miny = (float)block.y,           b_maxy = (float)block.y + 1.0f;
+    float b_minz = (float)block.z,           b_maxz = (float)block.z + 1.0f;
+    return (p_minx < b_maxx && p_maxx > b_minx) &&
+           (p_miny < b_maxy && p_maxy > b_miny) &&
+           (p_minz < b_maxz && p_maxz > b_minz);
 }
 
 static uint16_t palette_index_for_id(const char **ids, uint16_t *count, const char *id) {

@@ -1,5 +1,5 @@
 #pragma once
-#include "ecs.h"
-#include "world.h"
+#include "ecs.h"   /* kiln: world_t */
+#include "world.h" /* game: World (voxel) */
 
-void sys_movement(ECS *ecs, World *world, float dt);
+void sys_movement(world_t *ecs, World *world, float dt);

@@ -6,13 +6,12 @@
 #include "math3d.h"
 #include "logger.h"
 #include "game_input.h"
+#include "fps_camera.h"
 #include "ui.h"
 #include "voxel.h"
 #include "mesh.h"
-#include "camera.h"
 #include "world.h"
 #include "texture.h"
-#include "ecs.h"
 #include "components.h"
 #include "systems.h"
 #include "gui.h"
@@ -102,24 +101,24 @@ int main(void) {
     renderer_enable(R_CAP_CULL_FACE);
     renderer_enable(R_CAP_MULTISAMPLE);
 
-    ecs_init(&g_ecs, 4096);
-    components_init(&g_ecs);
+    g_ecs = world_create();
+    components_init(g_ecs);
     memset(g_block_entities, 0, sizeof(g_block_entities));
 
-    register_block_type(&g_ecs, BLOCK_AIR,    "kyub:air",    "Air",    false, false, 0.0f, NULL, NULL, NULL, NULL);
-    register_block_type(&g_ecs, BLOCK_DIRT,   "kyub:dirt",   "Dirt",   true,  true,  1.0f, "assets/textures/dirt.png",   NULL, NULL, NULL);
-    register_block_type(&g_ecs, BLOCK_GRASS,  "kyub:grass",  "Grass",  true,  true,  1.0f, "assets/textures/dirt.png",   "assets/textures/grass_top.png", "assets/textures/dirt.png", "assets/textures/grass_side.png");
-    register_block_type(&g_ecs, BLOCK_STONE,  "kyub:stone",  "Stone",  true,  true,  2.0f, "assets/textures/stone.png",  NULL, NULL, NULL);
-    register_block_type(&g_ecs, BLOCK_SAND,   "kyub:sand",   "Sand",   true,  true,  1.0f, "assets/textures/sand.png",   NULL, NULL, NULL);
-    register_block_type(&g_ecs, BLOCK_GRAVEL, "kyub:gravel", "Gravel", true,  true,  1.0f, "assets/textures/gravel.png", NULL, NULL, NULL);
-    register_block_type(&g_ecs, BLOCK_WOOD,   "kyub:wood",   "Wood",   true,  true,  2.0f, "assets/textures/wood.png",   NULL, NULL, NULL);
-    register_block_type(&g_ecs, BLOCK_LEAVES, "kyub:leaves", "Leaves", true,  false, 0.5f, "assets/textures/leaves.png", NULL, NULL, NULL);
+    register_block_type(g_ecs, BLOCK_AIR,    "kyub:air",    "Air",    false, false, 0.0f, NULL, NULL, NULL, NULL);
+    register_block_type(g_ecs, BLOCK_DIRT,   "kyub:dirt",   "Dirt",   true,  true,  1.0f, "assets/textures/dirt.png",   NULL, NULL, NULL);
+    register_block_type(g_ecs, BLOCK_GRASS,  "kyub:grass",  "Grass",  true,  true,  1.0f, "assets/textures/dirt.png",   "assets/textures/grass_top.png", "assets/textures/dirt.png", "assets/textures/grass_side.png");
+    register_block_type(g_ecs, BLOCK_STONE,  "kyub:stone",  "Stone",  true,  true,  2.0f, "assets/textures/stone.png",  NULL, NULL, NULL);
+    register_block_type(g_ecs, BLOCK_SAND,   "kyub:sand",   "Sand",   true,  true,  1.0f, "assets/textures/sand.png",   NULL, NULL, NULL);
+    register_block_type(g_ecs, BLOCK_GRAVEL, "kyub:gravel", "Gravel", true,  true,  1.0f, "assets/textures/gravel.png", NULL, NULL, NULL);
+    register_block_type(g_ecs, BLOCK_WOOD,   "kyub:wood",   "Wood",   true,  true,  2.0f, "assets/textures/wood.png",   NULL, NULL, NULL);
+    register_block_type(g_ecs, BLOCK_LEAVES, "kyub:leaves", "Leaves", true,  false, 0.5f, "assets/textures/leaves.png", NULL, NULL, NULL);
 
     /* Collect unique texture paths */
     const char *tex_paths[32]; int tex_path_count = 0;
     for (int t = 0; t < 256; t++) {
-        Entity e = g_block_entities[t]; if (!e) continue;
-        C_BlockDef *def = ecs_get(&g_ecs, e, COMP_BLOCK_DEF); if (!def) continue;
+        entity_t e = g_block_entities[t]; if (e == ECS_ENTITY_NULL) continue;
+        C_BlockDef *def = entity_get_component(g_ecs, e, COMP_BLOCK_DEF); if (!def) continue;
         const char *paths[4] = {def->tex_path, def->tex_top, def->tex_bottom, def->tex_side};
         for (int p = 0; p < 4; p++) {
             if (!paths[p]) continue;
@@ -134,8 +133,8 @@ int main(void) {
 
     /* Resolve layer indices */
     for (int t = 0; t < 256; t++) {
-        Entity e = g_block_entities[t]; if (!e) continue;
-        C_BlockDef *def = ecs_get(&g_ecs, e, COMP_BLOCK_DEF); if (!def) continue;
+        entity_t e = g_block_entities[t]; if (e == ECS_ENTITY_NULL) continue;
+        C_BlockDef *def = entity_get_component(g_ecs, e, COMP_BLOCK_DEF); if (!def) continue;
         const char *paths[4] = {def->tex_path, def->tex_top, def->tex_bottom, def->tex_side};
         int *layers[4] = {&def->layer_default, &def->layer_top, &def->layer_bottom, &def->layer_side};
         for (int p = 0; p < 4; p++) {
@@ -238,11 +237,19 @@ int main(void) {
     World world;
     world_init(&world, 2);
 
-    Camera camera;
-    camera_init(&camera, &g_ecs);
+    fps_camera_t camera;
+    fps_camera_init(&camera);
+    entity_t player = entity_create(g_ecs);
+    C_Transform *pt = entity_add_component(g_ecs, player, COMP_TRANSFORM);
+    pt->position = (vec3){8.0f, 20.0f, 8.0f};
+    pt->yaw = -90.0f; pt->pitch = -45.0f;
+    C_Movement *pm = entity_add_component(g_ecs, player, COMP_MOVEMENT);
+    pm->velocity = (vec3){0,0,0}; pm->speed = 5.0f; pm->grounded = false;
+    C_Health *ph = entity_add_component(g_ecs, player, COMP_HEALTH);
+    ph->current = ph->max = 20.0f;
 
-    C_Transform *player_transform = ecs_get(&g_ecs, camera.player, COMP_TRANSFORM);
-    vec3 player_pos = player_transform ? player_transform->position : (vec3){8.0f, 20.0f, 8.0f};
+    C_Transform *player_transform = pt;
+    vec3 player_pos = player_transform->position;
 
     world_update(&world, player_pos);
     for (int i = 0; i < 10; i++) world_update(&world, player_pos);
@@ -325,12 +332,40 @@ int main(void) {
                         game_input.mouse_left);
 
         if (paused) {
-            GameInput zero = {0};
-            camera_update(&camera, (float)dt, &world, &zero, &g_ecs);
-            sys_movement(&g_ecs, &world, 0.0f);
+            sys_movement(g_ecs, &world, 0.0f);
         } else {
-            camera_update(&camera, (float)dt, &world, &game_input, &g_ecs);
-            sys_movement(&g_ecs, &world, (float)dt);
+            /* Mouse look */
+            fps_camera_rotate(&camera, game_input.mouse_dx, game_input.mouse_dy);
+            game_input.mouse_dx = 0; game_input.mouse_dy = 0;
+
+            /* WASD movement with axis-separated collision */
+            C_Transform *ct = entity_get_component(g_ecs, player, COMP_TRANSFORM);
+            C_Movement  *cm = entity_get_component(g_ecs, player, COMP_MOVEMENT);
+            if (ct && cm) {
+                float vel = cm->speed * (float)dt;
+                if (game_input.keys[0xe1]) vel *= 6.0f; /* Shift */
+                if (vel > 0.3f) vel = 0.3f;
+                vec3 right, up_unused;
+                fps_camera_basis(&camera, &right, &up_unused);
+                vec3 move = {0,0,0};
+                if (game_input.keys['w']) move = vec3_add(move, camera.front);
+                if (game_input.keys['s']) move = vec3_sub(move, camera.front);
+                if (game_input.keys['a']) move = vec3_sub(move, right);
+                if (game_input.keys['d']) move = vec3_add(move, right);
+                if (move.x != 0 || move.z != 0) {
+                    move = vec3_normalize(move);
+                    float nx = ct->position.x + move.x * vel;
+                    float nz = ct->position.z + move.z * vel;
+                    float ox = ct->position.x, oz = ct->position.z;
+                    if (position_is_safe(&world, (vec3){nx, ct->position.y, oz})) ct->position.x = nx;
+                    if (position_is_safe(&world, (vec3){ox, ct->position.y, nz})) ct->position.z = nz;
+                }
+                if (game_input.keys[' '] && cm->grounded) {
+                    cm->velocity.y = JUMP_VELOCITY;
+                    cm->grounded = false;
+                }
+            }
+            sys_movement(g_ecs, &world, (float)dt);
         }
 
         static float break_cooldown = 0.0f;
@@ -338,7 +373,7 @@ int main(void) {
         break_cooldown -= (float)dt;
         place_cooldown -= (float)dt;
 
-        player_transform = ecs_get(&g_ecs, camera.player, COMP_TRANSFORM);
+        player_transform = entity_get_component(g_ecs, player, COMP_TRANSFORM);
         vec3 cam_pos = player_transform ? player_transform->position : (vec3){0,0,0};
 
         if (!paused) {
@@ -377,7 +412,7 @@ int main(void) {
 
         float aspect = (win_height > 0) ? (float)win_width / (float)win_height : 1.0f;
         mat4 projection = mat4_perspective(FOV_DEGREES * PI / 180.0f, aspect, NEAR_PLANE, FAR_PLANE);
-        mat4 view       = camera_get_view_matrix(&camera, &g_ecs);
+        mat4 view       = fps_camera_view(&camera, cam_pos);
 
         Frustum frustum; frustum_extract(&frustum, mat4_mul(projection, view));
 
@@ -537,7 +572,7 @@ int main(void) {
     gui_shutdown(&gui);
     renderer_destroy_texture(tex_array);
     renderer_shutdown();
-    ecs_shutdown(&g_ecs);
+    world_destroy(g_ecs);
 
 #ifdef ENABLE_LOGGER
     log_shutdown();

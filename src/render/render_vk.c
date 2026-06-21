@@ -79,14 +79,24 @@ typedef struct {
     float base_color[4];
 } material_ubo_t;
 
-/* Per-frame scene uniform.  All vec4 for trivial std140; light_vp is a full
-   mat4 (64 bytes) appended after the four vec4s, total 128 bytes. */
+/* Per-frame point light entry (3 × vec4 = 48 bytes, 16-byte aligned). */
 typedef struct {
-    float light_dir[4];     /* xyz: unit direction toward the key light */
-    float light_color[4];   /* xyz: RGB intensity of the key light */
-    float ambient_color[4]; /* xyz: ambient fill RGB */
-    float view_pos[4];      /* xyz: camera world-space position */
-    float light_vp[16];     /* mat4: light view-projection for shadow mapping */
+    float pos[4];    /* xyz: world-space position, w: unused */
+    float color[4];  /* xyz: RGB intensity, w: unused */
+    float params[4]; /* x: radius, yzw: unused */
+} point_light_ubo_t;
+
+/* Per-frame scene uniform (std140).
+   light_dir.w  = active point-light count (int cast to float).
+   light_vp     = mat4 for directional shadow mapping (64 bytes).
+   point_lights = up to RENDER_MAX_POINT_LIGHTS entries × 48 bytes each. */
+typedef struct {
+    float light_dir[4];
+    float light_color[4];
+    float ambient_color[4];
+    float view_pos[4];
+    float light_vp[16];
+    point_light_ubo_t point_lights[RENDER_MAX_POINT_LIGHTS];
 } scene_ubo_t;
 
 /* One queued draw: which mesh + material, plus the matrices the shader needs. */
@@ -180,6 +190,9 @@ static struct {
     frustum_t frustum; /* extracted each frame in render_set_camera */
     mesh_instance_t *instances; /* capacity MAX_INSTANCES */
     uint32_t instance_count;
+
+    /* Point lights queued this frame; cleared each frame like instances. */
+    uint32_t point_light_count;
 
     /* Debug text: a screen-space 2D pipeline with per-frame-in-flight vertex
        buffers (persistently mapped) fed from a CPU staging array. */
@@ -1608,6 +1621,14 @@ void render_set_light(vec3_t dir, vec3_t color, vec3_t ambient) {
     g.scene_data.ambient_color[2] = ambient.z;
 }
 
+void render_add_point_light(vec3_t pos, vec3_t color, float radius) {
+    if (g.point_light_count >= RENDER_MAX_POINT_LIGHTS) return;
+    point_light_ubo_t *pl = &g.scene_data.point_lights[g.point_light_count++];
+    pl->pos[0] = pos.x;   pl->pos[1] = pos.y;   pl->pos[2] = pos.z;
+    pl->color[0] = color.x; pl->color[1] = color.y; pl->color[2] = color.z;
+    pl->params[0] = radius;
+}
+
 static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
                                   uint32_t instance_count,
                                   uint32_t text_verts) {
@@ -1753,6 +1774,7 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
                            ? g.wireframe_pipeline : g.pipeline;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_pipe);
 
+    g.scene_data.light_dir[3] = (float)g.point_light_count;
     memcpy(g.scene_ubo_mapped[g.frame], &g.scene_data, sizeof(g.scene_data));
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             g.pipeline_layout, 1, 1,
@@ -2123,6 +2145,7 @@ void render_draw(void) {
        an early-return frame (e.g. resize). */
     uint32_t instance_count = g.instance_count;
     g.instance_count = 0;
+    g.point_light_count = 0;
     uint32_t text_verts = g.text_vert_count;
     g.text_vert_count = 0;
 

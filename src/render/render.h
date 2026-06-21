@@ -74,6 +74,12 @@ void render_set_clear_color(float r, float g, float b);
    `ambient` is the ambient fill RGB. Both persist until overwritten. */
 void render_set_light(vec3_t dir, vec3_t color, vec3_t ambient);
 
+/* Queue a point light for this frame. Up to RENDER_MAX_POINT_LIGHTS per frame;
+   extras are silently dropped. The queue is cleared each frame like render_mesh.
+   `radius` controls the attenuation falloff distance. */
+#define RENDER_MAX_POINT_LIGHTS 8
+void render_add_point_light(vec3_t pos, vec3_t color, float radius);
+
 /* Acquire, record and present one frame. Recreates the swapchain
    transparently when the window is resized. */
 void render_draw(void);

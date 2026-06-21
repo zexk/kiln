@@ -11,12 +11,19 @@ layout(set = 0, binding = 0) uniform Material {
 } mat;
 layout(set = 0, binding = 1) uniform sampler2D albedo;
 
+struct PointLight {
+    vec4 pos;    /* xyz: world position */
+    vec4 color;  /* xyz: RGB intensity */
+    vec4 params; /* x: radius */
+};
+
 layout(set = 1, binding = 0) uniform SceneUBO {
-    vec4 light_dir;
-    vec4 light_color;
-    vec4 ambient_color;
-    vec4 view_pos;
-    mat4 light_vp;
+    vec4       light_dir;                /* xyz: dir, w: point_light_count */
+    vec4       light_color;
+    vec4       ambient_color;
+    vec4       view_pos;
+    mat4       light_vp;
+    PointLight point_lights[8];
 } scene;
 layout(set = 1, binding = 1) uniform sampler2DShadow shadow_map;
 
@@ -31,22 +38,40 @@ float pcf_shadow(vec3 proj) {
 
 void main() {
     vec3 n = normalize(frag_normal);
-    vec3 l = normalize(scene.light_dir.xyz);
     vec3 v = normalize(scene.view_pos.xyz - frag_world_pos);
-    vec3 h = normalize(l + v);
 
-    float ndotl   = dot(n, l);
-    float diffuse = abs(ndotl);
-    float spec    = max(ndotl, 0.0) * pow(max(dot(n, h), 0.0), 32.0);
+    /* Directional light + shadow. */
+    vec3 l    = normalize(scene.light_dir.xyz);
+    vec3 h    = normalize(l + v);
+    float ndl = dot(n, l);
+    float diff = abs(ndl);
+    float spec = max(ndl, 0.0) * pow(max(dot(n, h), 0.0), 32.0);
 
-    /* Shadow: project frag_world_pos into the light's clip space. */
     vec4 lc   = scene.light_vp * vec4(frag_world_pos, 1.0);
     vec3 proj = lc.xyz / lc.w;
     proj.xy   = proj.xy * 0.5 + 0.5;
     float shadow = (proj.z > 1.0) ? 1.0 : pcf_shadow(proj);
 
     vec3 base  = mat.base_color.rgb * texture(albedo, frag_uv).rgb;
-    vec3 color = base  * (shadow * diffuse * scene.light_color.rgb + scene.ambient_color.rgb)
+    vec3 color = base  * (shadow * diff * scene.light_color.rgb + scene.ambient_color.rgb)
                + shadow * spec * 0.35 * scene.light_color.rgb;
+
+    /* Point lights: inverse-square attenuation within radius. */
+    int n_pl = int(scene.light_dir.w);
+    for (int i = 0; i < n_pl; i++) {
+        vec3  lp  = scene.point_lights[i].pos.xyz - frag_world_pos;
+        float d   = length(lp);
+        float r   = scene.point_lights[i].params.x;
+        if (d >= r) continue;
+        float att = 1.0 - (d / r);
+        att      *= att; /* quadratic falloff */
+        vec3  ln  = lp / d;
+        vec3  ph  = normalize(ln + v);
+        float pd  = max(dot(n, ln), 0.0);
+        float ps  = pd * pow(max(dot(n, ph), 0.0), 32.0);
+        vec3  plc = scene.point_lights[i].color.rgb;
+        color += att * (base * pd * plc + ps * 0.35 * plc);
+    }
+
     out_color = vec4(color, 1.0);
 }

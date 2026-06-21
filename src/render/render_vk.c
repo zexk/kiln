@@ -10,6 +10,7 @@
 
 #include "render.h"
 #include "core.h"
+#include "frustum.h"
 #include "linalg.h"
 #include "mesh.h"
 #include "font8x8.h"
@@ -52,6 +53,8 @@ typedef struct {
     VkBuffer index_buffer;
     VkDeviceMemory index_memory;
     uint32_t index_count;
+    vec3_t bounds_min; /* local-space AABB for frustum culling */
+    vec3_t bounds_max;
 } gpu_mesh_t;
 
 /* A sampled 2D image. */
@@ -163,6 +166,7 @@ static struct {
     /* Mesh draws queued this frame; drained in record_command_buffer. */
     mat4_t view;
     mat4_t proj;
+    frustum_t frustum; /* extracted each frame in render_set_camera */
     mesh_instance_t *instances; /* capacity MAX_INSTANCES */
     uint32_t instance_count;
 
@@ -1290,6 +1294,7 @@ void render_set_camera(mat4_t view, mat4_t proj) {
     g.scene_data.view_pos[1] = inv.m[13];
     g.scene_data.view_pos[2] = inv.m[14];
     g.scene_data.view_pos[3] = 1.0f;
+    frustum_extract(&g.frustum, mat4_mul(proj, view));
 }
 
 void render_mesh(mesh_handle_t mesh, material_handle_t material, mat4_t model) {
@@ -1297,6 +1302,32 @@ void render_mesh(mesh_handle_t mesh, material_handle_t material, mat4_t model) {
         material >= g.material_count) {
         return;
     }
+
+    /* Frustum cull: transform local AABB corners into world space, refit,
+       and reject draws whose world AABB lies entirely outside any plane. */
+    const gpu_mesh_t *gm = &g.meshes[mesh];
+    vec3_t lmin = gm->bounds_min, lmax = gm->bounds_max;
+    vec3_t corners[8] = {
+        {lmin.x, lmin.y, lmin.z}, {lmax.x, lmin.y, lmin.z},
+        {lmin.x, lmax.y, lmin.z}, {lmax.x, lmax.y, lmin.z},
+        {lmin.x, lmin.y, lmax.z}, {lmax.x, lmin.y, lmax.z},
+        {lmin.x, lmax.y, lmax.z}, {lmax.x, lmax.y, lmax.z},
+    };
+    vec3_t wmin = mat4_transform_point(model, corners[0]);
+    vec3_t wmax = wmin;
+    for (int i = 1; i < 8; i++) {
+        vec3_t w = mat4_transform_point(model, corners[i]);
+        if (w.x < wmin.x) wmin.x = w.x;
+        if (w.y < wmin.y) wmin.y = w.y;
+        if (w.z < wmin.z) wmin.z = w.z;
+        if (w.x > wmax.x) wmax.x = w.x;
+        if (w.y > wmax.y) wmax.y = w.y;
+        if (w.z > wmax.z) wmax.z = w.z;
+    }
+    if (!frustum_intersects_aabb(&g.frustum, wmin, wmax)) {
+        return;
+    }
+
     mesh_instance_t *inst = &g.instances[g.instance_count++];
     inst->mesh = mesh;
     inst->material = material;
@@ -1587,6 +1618,11 @@ mesh_handle_t render_upload_mesh(const cpu_mesh_t *mesh) {
                               VK_BUFFER_USAGE_INDEX_BUFFER_BIT, &gm.index_buffer,
                               &gm.index_memory)) {
         return RENDER_MESH_INVALID;
+    }
+
+    if (!cpu_mesh_bounds(mesh, &gm.bounds_min, &gm.bounds_max)) {
+        /* degenerate mesh: treat as a single point at the origin */
+        gm.bounds_min = gm.bounds_max = (vec3_t){0, 0, 0};
     }
 
     g.meshes[g.mesh_count] = gm;

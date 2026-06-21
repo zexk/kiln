@@ -41,6 +41,11 @@ texture_handle_t render_upload_texture(const uint8_t *rgba, uint32_t w,
 material_handle_t render_create_material(vec4_t base_color,
                                          texture_handle_t texture);
 
+/* Attach a normal map to an existing material for tangent-space normal mapping.
+   Pass RENDER_TEXTURE_INVALID to revert to the built-in flat normal (0,0,1). */
+void render_set_material_normal_map(material_handle_t mat,
+                                    texture_handle_t normal_map);
+
 /* Set the view and projection used for this frame's queued meshes. Call once
    per frame before render_mesh. Persists until overwritten. */
 void render_set_camera(mat4_t view, mat4_t proj);

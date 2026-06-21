@@ -99,6 +99,14 @@ typedef struct {
     point_light_ubo_t point_lights[RENDER_MAX_POINT_LIGHTS];
 } scene_ubo_t;
 
+/* Extended GPU vertex: cpu_mesh_t fields plus a tangent computed at upload. */
+typedef struct {
+    vec3_t position;
+    vec3_t normal;
+    vec2_t uv;
+    vec3_t tangent;
+} gpu_vertex_t;
+
 /* One queued draw: which mesh + material, plus the matrices the shader needs. */
 typedef struct {
     mesh_handle_t mesh;
@@ -168,7 +176,8 @@ static struct {
 
     gpu_texture_t textures[MAX_TEXTURES];
     uint32_t texture_count;
-    texture_handle_t default_texture; /* 1x1 white, for untextured materials */
+    texture_handle_t default_texture;        /* 1x1 white, for untextured materials */
+    texture_handle_t default_normal_texture; /* 1x1 flat (128,128,255) */
     VkSampler sampler;
 
     VkDescriptorSetLayout material_set_layout;
@@ -749,38 +758,41 @@ static bool create_depth_resources(void) {
 /* materials: descriptor layout, pool, sampler                              */
 /* ----------------------------------------------------------------------- */
 
-/* Each material owns a descriptor set with this layout: binding 0 a uniform
-   buffer (base colour), binding 1 a combined image sampler (albedo). Created
-   before the pipeline, which references the set layout. */
+/* Each material owns a descriptor set: binding 0 = UBO (base colour),
+   binding 1 = albedo sampler, binding 2 = normal map sampler. */
 static bool create_material_infra(void) {
-    VkDescriptorSetLayoutBinding bindings[2] = {0};
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    VkDescriptorSetLayoutBinding bindings[3] = {0};
+    bindings[0].binding         = 0;
+    bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding         = 1;
+    bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[2].binding         = 2;
+    bindings[2].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layout = {0};
-    layout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout.bindingCount = 2;
-    layout.pBindings = bindings;
+    layout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout.bindingCount = 3;
+    layout.pBindings    = bindings;
     VK_CHECK(vkCreateDescriptorSetLayout(g.device, &layout, NULL,
                                          &g.material_set_layout));
 
     VkDescriptorPoolSize sizes[2] = {0};
-    sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    sizes[0].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     sizes[0].descriptorCount = MAX_MATERIALS;
-    sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    sizes[1].descriptorCount = MAX_MATERIALS;
+    sizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    sizes[1].descriptorCount = MAX_MATERIALS * 2; /* albedo + normal per material */
 
     VkDescriptorPoolCreateInfo pool = {0};
-    pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool.maxSets = MAX_MATERIALS;
+    pool.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool.maxSets      = MAX_MATERIALS;
     pool.poolSizeCount = 2;
-    pool.pPoolSizes = sizes;
+    pool.pPoolSizes   = sizes;
     VK_CHECK(vkCreateDescriptorPool(g.device, &pool, NULL, &g.descriptor_pool));
 
     VkFormatProperties fmt_props;
@@ -970,9 +982,9 @@ static bool create_shadow_pipeline(void) {
 
     /* Only read position (location 0); normal and uv sit in the buffer but
        are not declared in shadow.vert — the stride covers the full vertex. */
-    VkVertexInputBindingDescription vbind = {0, sizeof(mesh_vertex_t), VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputBindingDescription vbind = {0, sizeof(gpu_vertex_t), VK_VERTEX_INPUT_RATE_VERTEX};
     VkVertexInputAttributeDescription vattr = {0, 0, VK_FORMAT_R32G32B32_SFLOAT,
-                                               offsetof(mesh_vertex_t, position)};
+                                               offsetof(gpu_vertex_t, position)};
     VkPipelineVertexInputStateCreateInfo vi = {0};
     vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vi.vertexBindingDescriptionCount   = 1;
@@ -1068,19 +1080,20 @@ static bool build_mesh_pipeline(VkPolygonMode poly_mode, VkPipeline *out) {
 
     VkVertexInputBindingDescription binding = {0};
     binding.binding   = 0;
-    binding.stride    = sizeof(mesh_vertex_t);
+    binding.stride    = sizeof(gpu_vertex_t);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    VkVertexInputAttributeDescription attrs[3] = {0};
-    attrs[0] = (VkVertexInputAttributeDescription){0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(mesh_vertex_t, position)};
-    attrs[1] = (VkVertexInputAttributeDescription){1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(mesh_vertex_t, normal)};
-    attrs[2] = (VkVertexInputAttributeDescription){2, 0, VK_FORMAT_R32G32_SFLOAT,    offsetof(mesh_vertex_t, uv)};
+    VkVertexInputAttributeDescription attrs[4] = {0};
+    attrs[0] = (VkVertexInputAttributeDescription){0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(gpu_vertex_t, position)};
+    attrs[1] = (VkVertexInputAttributeDescription){1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(gpu_vertex_t, normal)};
+    attrs[2] = (VkVertexInputAttributeDescription){2, 0, VK_FORMAT_R32G32_SFLOAT,    offsetof(gpu_vertex_t, uv)};
+    attrs[3] = (VkVertexInputAttributeDescription){3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(gpu_vertex_t, tangent)};
 
     VkPipelineVertexInputStateCreateInfo vertex_input = {0};
     vertex_input.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertex_input.vertexBindingDescriptionCount   = 1;
     vertex_input.pVertexBindingDescriptions      = &binding;
-    vertex_input.vertexAttributeDescriptionCount = 3;
+    vertex_input.vertexAttributeDescriptionCount = 4;
     vertex_input.pVertexAttributeDescriptions    = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo input_assembly = {0};
@@ -1868,14 +1881,17 @@ bool render_init(window_t *window) {
         return false;
     }
 
-    /* Built-in 1x1 white texture, substituted for untextured materials so the
-       shader always has something to sample. Needs the command pool, hence
-       after create_commands_and_sync. */
+    /* Built-in 1x1 white albedo and flat normal map, created after the command
+       pool so render_upload_texture can use single-time command buffers. */
     const uint8_t white[4] = {255, 255, 255, 255};
     g.default_texture = render_upload_texture(white, 1, 1);
-    if (g.default_texture == RENDER_TEXTURE_INVALID) {
-        return false;
-    }
+    if (g.default_texture == RENDER_TEXTURE_INVALID) return false;
+
+    /* Flat normal = tangent-space (0,0,1) encoded as (128,128,255). */
+    const uint8_t flat_normal[4] = {128, 128, 255, 255};
+    g.default_normal_texture = render_upload_texture(flat_normal, 1, 1);
+    if (g.default_normal_texture == RENDER_TEXTURE_INVALID) return false;
+
     return true;
 }
 
@@ -1886,23 +1902,58 @@ mesh_handle_t render_upload_mesh(const cpu_mesh_t *mesh) {
         return RENDER_MESH_INVALID;
     }
 
-    gpu_mesh_t gm = {0};
-    gm.index_count = mesh->index_count;
-    if (!create_filled_buffer(mesh->vertices,
-                              sizeof(mesh_vertex_t) * mesh->vertex_count,
-                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                              &gm.vertex_buffer, &gm.vertex_memory) ||
-        !create_filled_buffer(mesh->indices,
-                              sizeof(uint32_t) * mesh->index_count,
-                              VK_BUFFER_USAGE_INDEX_BUFFER_BIT, &gm.index_buffer,
-                              &gm.index_memory)) {
-        return RENDER_MESH_INVALID;
+    /* Build a GPU vertex buffer: copy cpu fields, then append per-vertex
+       tangents computed from triangle UV deltas (Gram-Schmidt not needed here;
+       we average raw tangents and normalize). */
+    gpu_vertex_t *gverts = calloc(mesh->vertex_count, sizeof(gpu_vertex_t));
+    if (!gverts) return RENDER_MESH_INVALID;
+
+    for (uint32_t i = 0; i < mesh->vertex_count; i++) {
+        gverts[i].position = mesh->vertices[i].position;
+        gverts[i].normal   = mesh->vertices[i].normal;
+        gverts[i].uv       = mesh->vertices[i].uv;
     }
 
-    if (!cpu_mesh_bounds(mesh, &gm.bounds_min, &gm.bounds_max)) {
-        /* degenerate mesh: treat as a single point at the origin */
-        gm.bounds_min = gm.bounds_max = (vec3_t){0, 0, 0};
+    /* Accumulate per-face tangents into each referenced vertex. */
+    for (uint32_t i = 0; i + 2 < mesh->index_count; i += 3) {
+        uint32_t i0 = mesh->indices[i], i1 = mesh->indices[i+1], i2 = mesh->indices[i+2];
+        vec3_t e1  = vec3_sub(mesh->vertices[i1].position, mesh->vertices[i0].position);
+        vec3_t e2  = vec3_sub(mesh->vertices[i2].position, mesh->vertices[i0].position);
+        float du1  = mesh->vertices[i1].uv.x - mesh->vertices[i0].uv.x;
+        float dv1  = mesh->vertices[i1].uv.y - mesh->vertices[i0].uv.y;
+        float du2  = mesh->vertices[i2].uv.x - mesh->vertices[i0].uv.x;
+        float dv2  = mesh->vertices[i2].uv.y - mesh->vertices[i0].uv.y;
+        float denom = du1 * dv2 - du2 * dv1;
+        if (fabsf(denom) < 1e-8f) continue;
+        float f = 1.0f / denom;
+        vec3_t t = {f * (dv2*e1.x - dv1*e2.x),
+                    f * (dv2*e1.y - dv1*e2.y),
+                    f * (dv2*e1.z - dv1*e2.z)};
+        gverts[i0].tangent = vec3_add(gverts[i0].tangent, t);
+        gverts[i1].tangent = vec3_add(gverts[i1].tangent, t);
+        gverts[i2].tangent = vec3_add(gverts[i2].tangent, t);
     }
+    for (uint32_t i = 0; i < mesh->vertex_count; i++) {
+        gverts[i].tangent = (vec3_length(gverts[i].tangent) > 1e-8f)
+            ? vec3_normalize(gverts[i].tangent)
+            : (vec3_t){1.0f, 0.0f, 0.0f};
+    }
+
+    gpu_mesh_t gm = {0};
+    gm.index_count = mesh->index_count;
+    bool ok = create_filled_buffer(gverts,
+                                   sizeof(gpu_vertex_t) * mesh->vertex_count,
+                                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                   &gm.vertex_buffer, &gm.vertex_memory) &&
+              create_filled_buffer(mesh->indices,
+                                   sizeof(uint32_t) * mesh->index_count,
+                                   VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                   &gm.index_buffer, &gm.index_memory);
+    free(gverts);
+    if (!ok) return RENDER_MESH_INVALID;
+
+    if (!cpu_mesh_bounds(mesh, &gm.bounds_min, &gm.bounds_max))
+        gm.bounds_min = gm.bounds_max = (vec3_t){0, 0, 0};
 
     g.meshes[g.mesh_count] = gm;
     return g.mesh_count++;
@@ -2114,30 +2165,62 @@ material_handle_t render_create_material(vec4_t base_color,
 
     VkDescriptorBufferInfo buffer_info = {0};
     buffer_info.buffer = m.ubo;
-    buffer_info.range = sizeof(data);
+    buffer_info.range  = sizeof(data);
 
-    VkDescriptorImageInfo image_info = {0};
-    image_info.sampler = g.sampler;
-    image_info.imageView = g.textures[texture].view;
-    image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo albedo_info = {0};
+    albedo_info.sampler     = g.sampler;
+    albedo_info.imageView   = g.textures[texture].view;
+    albedo_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    VkWriteDescriptorSet writes[2] = {0};
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = m.set;
-    writes[0].dstBinding = 0;
+    VkDescriptorImageInfo normal_info = {0};
+    normal_info.sampler     = g.sampler;
+    normal_info.imageView   = g.textures[g.default_normal_texture].view;
+    normal_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet writes[3] = {0};
+    writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet          = m.set;
+    writes[0].dstBinding      = 0;
     writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[0].pBufferInfo = &buffer_info;
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m.set;
-    writes[1].dstBinding = 1;
+    writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[0].pBufferInfo     = &buffer_info;
+    writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet          = m.set;
+    writes[1].dstBinding      = 1;
     writes[1].descriptorCount = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[1].pImageInfo = &image_info;
-    vkUpdateDescriptorSets(g.device, 2, writes, 0, NULL);
+    writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].pImageInfo      = &albedo_info;
+    writes[2].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet          = m.set;
+    writes[2].dstBinding      = 2;
+    writes[2].descriptorCount = 1;
+    writes[2].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].pImageInfo      = &normal_info;
+    vkUpdateDescriptorSets(g.device, 3, writes, 0, NULL);
 
     g.materials[g.material_count] = m;
     return g.material_count++;
+}
+
+void render_set_material_normal_map(material_handle_t mat,
+                                    texture_handle_t  normal_map) {
+    if (mat >= g.material_count) return;
+    if (normal_map >= g.texture_count)
+        normal_map = g.default_normal_texture;
+
+    VkDescriptorImageInfo info = {0};
+    info.sampler     = g.sampler;
+    info.imageView   = g.textures[normal_map].view;
+    info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write = {0};
+    write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet          = g.materials[mat].set;
+    write.dstBinding      = 2;
+    write.descriptorCount = 1;
+    write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo      = &info;
+    vkUpdateDescriptorSets(g.device, 1, &write, 0, NULL);
 }
 
 void render_draw(void) {

@@ -31,7 +31,9 @@
 #define MAX_TEXTURES 256
 #define MAX_MATERIALS 256
 #define MAX_INSTANCES 4096
-#define SHADOW_MAP_SIZE 2048
+#define SHADOW_MAP_SIZE   2048
+#define MAX_INST_TOTAL  16384 /* total model matrices across all instanced batches */
+#define MAX_INST_BATCHES   64
 
 #define VK_CHECK(x)                                                         \
     do {                                                                    \
@@ -107,13 +109,21 @@ typedef struct {
     vec3_t tangent;
 } gpu_vertex_t;
 
-/* One queued draw: which mesh + material, plus the matrices the shader needs. */
+/* One queued single draw. */
 typedef struct {
     mesh_handle_t mesh;
     material_handle_t material;
-    mat4_t mvp;   /* proj * view * model, for clip-space position */
-    mat4_t model; /* for transforming the normal into world space */
+    mat4_t mvp;
+    mat4_t model;
 } mesh_instance_t;
+
+/* One instanced batch: same mesh+material, N model matrices. */
+typedef struct {
+    mesh_handle_t    mesh;
+    material_handle_t material;
+    uint32_t         first; /* index into flat inst_models array */
+    uint32_t         count;
+} inst_batch_t;
 
 /* Vertex-stage push constants for the mesh pipeline (128 bytes = the minimum
    guaranteed maxPushConstantsSize, so this stays portable). */
@@ -202,6 +212,24 @@ static struct {
 
     /* Point lights queued this frame; cleared each frame like instances. */
     uint32_t point_light_count;
+
+    /* Instanced draw batches + flat model-matrix array (CPU side). */
+    mat4_t      *inst_models;    /* capacity MAX_INST_TOTAL */
+    uint32_t     inst_model_count;
+    inst_batch_t inst_batches[MAX_INST_BATCHES];
+    uint32_t     inst_batch_count;
+
+    /* Per-frame GPU buffer for instance model matrices (persistently mapped). */
+    VkBuffer     inst_vbuf[MAX_FRAMES_IN_FLIGHT];
+    VkDeviceMemory inst_vmem[MAX_FRAMES_IN_FLIGHT];
+    void        *inst_vmapped[MAX_FRAMES_IN_FLIGHT];
+
+    /* Instanced colour pipelines (push = mat4 proj_view, 64 bytes). */
+    VkPipelineLayout inst_layout;
+    VkPipeline       inst_pipeline;
+    VkPipeline       inst_wireframe_pipeline;
+    /* Instanced shadow pipeline reuses g.shadow_layout (same push). */
+    VkPipeline       shadow_inst_pipeline;
 
     /* Debug text: a screen-space 2D pipeline with per-frame-in-flight vertex
        buffers (persistently mapped) fed from a CPU staging array. */
@@ -1170,6 +1198,241 @@ static bool build_mesh_pipeline(VkPolygonMode poly_mode, VkPipeline *out) {
     return true;
 }
 
+/* Build one instanced mesh pipeline variant using mesh_inst.vert + mesh.frag.
+   Both bindings declared: 0 = vertex (VERTEX_RATE), 1 = instance (INSTANCE_RATE). */
+static bool build_inst_pipeline(VkPolygonMode poly_mode, VkPipeline *out) {
+    VkShaderModule vert, frag;
+    if (!create_shader_module("mesh_inst.vert", &vert) ||
+        !create_shader_module("mesh.frag", &frag))
+        return false;
+
+    VkPipelineShaderStageCreateInfo stages[2] = {0};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName  = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName  = "main";
+
+    VkVertexInputBindingDescription vbinds[2] = {0};
+    vbinds[0].binding   = 0; vbinds[0].stride = sizeof(gpu_vertex_t);
+    vbinds[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    vbinds[1].binding   = 1; vbinds[1].stride = sizeof(mat4_t);
+    vbinds[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+
+    VkVertexInputAttributeDescription vattrs[8] = {0};
+    vattrs[0] = (VkVertexInputAttributeDescription){0,0,VK_FORMAT_R32G32B32_SFLOAT,   offsetof(gpu_vertex_t,position)};
+    vattrs[1] = (VkVertexInputAttributeDescription){1,0,VK_FORMAT_R32G32B32_SFLOAT,   offsetof(gpu_vertex_t,normal)};
+    vattrs[2] = (VkVertexInputAttributeDescription){2,0,VK_FORMAT_R32G32_SFLOAT,      offsetof(gpu_vertex_t,uv)};
+    vattrs[3] = (VkVertexInputAttributeDescription){3,0,VK_FORMAT_R32G32B32_SFLOAT,   offsetof(gpu_vertex_t,tangent)};
+    vattrs[4] = (VkVertexInputAttributeDescription){4,1,VK_FORMAT_R32G32B32A32_SFLOAT, 0};
+    vattrs[5] = (VkVertexInputAttributeDescription){5,1,VK_FORMAT_R32G32B32A32_SFLOAT,16};
+    vattrs[6] = (VkVertexInputAttributeDescription){6,1,VK_FORMAT_R32G32B32A32_SFLOAT,32};
+    vattrs[7] = (VkVertexInputAttributeDescription){7,1,VK_FORMAT_R32G32B32A32_SFLOAT,48};
+
+    VkPipelineVertexInputStateCreateInfo vi = {0};
+    vi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount   = 2;
+    vi.pVertexBindingDescriptions      = vbinds;
+    vi.vertexAttributeDescriptionCount = 8;
+    vi.pVertexAttributeDescriptions    = vattrs;
+
+    VkPipelineInputAssemblyStateCreateInfo ia = {0};
+    ia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp_s = {0};
+    vp_s.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp_s.viewportCount = 1;
+    vp_s.scissorCount  = 1;
+
+    VkPipelineRasterizationStateCreateInfo raster = {0};
+    raster.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = poly_mode;
+    raster.cullMode    = VK_CULL_MODE_NONE;
+    raster.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    raster.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms = {0};
+    ms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo ds = {0};
+    ds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable  = VK_TRUE;
+    ds.depthWriteEnable = VK_TRUE;
+    ds.depthCompareOp   = VK_COMPARE_OP_LESS;
+
+    VkPipelineColorBlendAttachmentState blend_att = {0};
+    blend_att.colorWriteMask = 0xF;
+    VkPipelineColorBlendStateCreateInfo blend = {0};
+    blend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1;
+    blend.pAttachments    = &blend_att;
+
+    VkDynamicState dyn_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn = {0};
+    dyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = 2;
+    dyn.pDynamicStates    = dyn_states;
+
+    VkPipelineRenderingCreateInfo rendering = {0};
+    rendering.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering.colorAttachmentCount    = 1;
+    rendering.pColorAttachmentFormats = &g.swapchain_format;
+    rendering.depthAttachmentFormat   = g.depth_format;
+
+    VkGraphicsPipelineCreateInfo info = {0};
+    info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.pNext               = &rendering;
+    info.stageCount          = 2;
+    info.pStages             = stages;
+    info.pVertexInputState   = &vi;
+    info.pInputAssemblyState = &ia;
+    info.pViewportState      = &vp_s;
+    info.pRasterizationState = &raster;
+    info.pMultisampleState   = &ms;
+    info.pDepthStencilState  = &ds;
+    info.pColorBlendState    = &blend;
+    info.pDynamicState       = &dyn;
+    info.layout              = g.inst_layout;
+
+    VkResult res = vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1,
+                                             &info, NULL, out);
+    vkDestroyShaderModule(g.device, vert, NULL);
+    vkDestroyShaderModule(g.device, frag, NULL);
+    return res == VK_SUCCESS;
+}
+
+static bool create_inst_pipelines(void) {
+    /* Layout: same descriptor sets as mesh pipeline, 64-byte push constant. */
+    VkPushConstantRange push = {VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(mat4_t)};
+    VkDescriptorSetLayout set_layouts[] = {g.material_set_layout, g.scene_set_layout};
+    VkPipelineLayoutCreateInfo lci = {0};
+    lci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    lci.setLayoutCount         = 2;
+    lci.pSetLayouts            = set_layouts;
+    lci.pushConstantRangeCount = 1;
+    lci.pPushConstantRanges    = &push;
+    VK_CHECK(vkCreatePipelineLayout(g.device, &lci, NULL, &g.inst_layout));
+
+    if (!build_inst_pipeline(VK_POLYGON_MODE_FILL, &g.inst_pipeline))
+        return false;
+    if (g.wireframe_supported &&
+        !build_inst_pipeline(VK_POLYGON_MODE_LINE, &g.inst_wireframe_pipeline))
+        return false;
+
+    /* Instanced shadow pipeline — reuses shadow_layout (same 64-byte push). */
+    VkShaderModule sv;
+    if (!create_shader_module("shadow_inst.vert", &sv)) return false;
+
+    VkPipelineShaderStageCreateInfo sstage = {0};
+    sstage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    sstage.stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    sstage.module = sv;
+    sstage.pName  = "main";
+
+    VkVertexInputBindingDescription svbinds[2] = {0};
+    svbinds[0].binding = 0; svbinds[0].stride = sizeof(gpu_vertex_t);
+    svbinds[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    svbinds[1].binding = 1; svbinds[1].stride = sizeof(mat4_t);
+    svbinds[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+
+    VkVertexInputAttributeDescription svattrs[5] = {0};
+    svattrs[0] = (VkVertexInputAttributeDescription){0,0,VK_FORMAT_R32G32B32_SFLOAT,   offsetof(gpu_vertex_t,position)};
+    svattrs[1] = (VkVertexInputAttributeDescription){4,1,VK_FORMAT_R32G32B32A32_SFLOAT, 0};
+    svattrs[2] = (VkVertexInputAttributeDescription){5,1,VK_FORMAT_R32G32B32A32_SFLOAT,16};
+    svattrs[3] = (VkVertexInputAttributeDescription){6,1,VK_FORMAT_R32G32B32A32_SFLOAT,32};
+    svattrs[4] = (VkVertexInputAttributeDescription){7,1,VK_FORMAT_R32G32B32A32_SFLOAT,48};
+
+    VkPipelineVertexInputStateCreateInfo svi = {0};
+    svi.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    svi.vertexBindingDescriptionCount   = 2;
+    svi.pVertexBindingDescriptions      = svbinds;
+    svi.vertexAttributeDescriptionCount = 5;
+    svi.pVertexAttributeDescriptions    = svattrs;
+
+    VkPipelineInputAssemblyStateCreateInfo sia = {0};
+    sia.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    sia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo svp = {0};
+    svp.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    svp.viewportCount = 1;
+    svp.scissorCount  = 1;
+
+    VkPipelineRasterizationStateCreateInfo srast = {0};
+    srast.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    srast.polygonMode             = VK_POLYGON_MODE_FILL;
+    srast.cullMode                = VK_CULL_MODE_BACK_BIT;
+    srast.frontFace               = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    srast.lineWidth               = 1.0f;
+    srast.depthBiasEnable         = VK_TRUE;
+    srast.depthBiasConstantFactor = 1.25f;
+    srast.depthBiasSlopeFactor    = 1.75f;
+
+    VkPipelineMultisampleStateCreateInfo sms = {0};
+    sms.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    sms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo sds = {0};
+    sds.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    sds.depthTestEnable  = VK_TRUE;
+    sds.depthWriteEnable = VK_TRUE;
+    sds.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    VkPipelineColorBlendStateCreateInfo sblend = {0};
+    sblend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+
+    VkDynamicState sdyn_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo sdyn = {0};
+    sdyn.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    sdyn.dynamicStateCount = 2;
+    sdyn.pDynamicStates    = sdyn_states;
+
+    VkPipelineRenderingCreateInfo srender = {0};
+    srender.sType                 = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    srender.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+
+    VkGraphicsPipelineCreateInfo sinfo = {0};
+    sinfo.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    sinfo.pNext               = &srender;
+    sinfo.stageCount          = 1;
+    sinfo.pStages             = &sstage;
+    sinfo.pVertexInputState   = &svi;
+    sinfo.pInputAssemblyState = &sia;
+    sinfo.pViewportState      = &svp;
+    sinfo.pRasterizationState = &srast;
+    sinfo.pMultisampleState   = &sms;
+    sinfo.pDepthStencilState  = &sds;
+    sinfo.pColorBlendState    = &sblend;
+    sinfo.pDynamicState       = &sdyn;
+    sinfo.layout              = g.shadow_layout;
+
+    VkResult res = vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1,
+                                             &sinfo, NULL, &g.shadow_inst_pipeline);
+    vkDestroyShaderModule(g.device, sv, NULL);
+    if (res != VK_SUCCESS) {
+        fprintf(stderr, "[render] shadow_inst pipeline failed: %d\n", res);
+        return false;
+    }
+
+    /* Per-frame GPU instance buffer (persistently mapped). */
+    VkDeviceSize ibuf_size = (VkDeviceSize)MAX_INST_TOTAL * sizeof(mat4_t);
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        if (!create_buffer(ibuf_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           &g.inst_vbuf[i], &g.inst_vmem[i]))
+            return false;
+        VK_CHECK(vkMapMemory(g.device, g.inst_vmem[i], 0, ibuf_size, 0,
+                             &g.inst_vmapped[i]));
+    }
+    return true;
+}
+
 static bool create_pipeline(void) {
     VkPushConstantRange push = {0};
     push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
@@ -1642,8 +1905,26 @@ void render_add_point_light(vec3_t pos, vec3_t color, float radius) {
     pl->params[0] = radius;
 }
 
+void render_mesh_instanced(mesh_handle_t mesh, material_handle_t material,
+                           const mat4_t *models, uint32_t count) {
+    if (count == 0 || mesh >= g.mesh_count || material >= g.material_count)
+        return;
+    if (g.inst_batch_count >= MAX_INST_BATCHES ||
+        g.inst_model_count + count > MAX_INST_TOTAL) {
+        fprintf(stderr, "[render] instanced batch overflow\n");
+        return;
+    }
+    memcpy(&g.inst_models[g.inst_model_count], models, sizeof(mat4_t) * count);
+    g.inst_batches[g.inst_batch_count++] = (inst_batch_t){
+        mesh, material, g.inst_model_count, count
+    };
+    g.inst_model_count += count;
+}
+
 static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
                                   uint32_t instance_count,
+                                  uint32_t inst_batch_count,
+                                  uint32_t inst_model_count,
                                   uint32_t text_verts) {
     VkCommandBufferBeginInfo begin = {0};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1701,6 +1982,11 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g.shadow_pipeline);
 
+    /* Upload instance models to the GPU buffer (used by both shadow and colour). */
+    if (inst_model_count > 0)
+        memcpy(g.inst_vmapped[g.frame], g.inst_models,
+               sizeof(mat4_t) * inst_model_count);
+
     for (uint32_t i = 0; i < instance_count; i++) {
         const mesh_instance_t *inst = &g.instances[i];
         const gpu_mesh_t *mesh      = &g.meshes[inst->mesh];
@@ -1711,6 +1997,22 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
         vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->vertex_buffer, &offset);
         vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, mesh->index_count, 1, 0, 0, 0);
+    }
+    /* Instanced shadow draws: one push (light_vp) covers all batches. */
+    if (inst_batch_count > 0) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          g.shadow_inst_pipeline);
+        vkCmdPushConstants(cmd, g.shadow_layout, VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(mat4_t), &light_vp);
+        for (uint32_t b = 0; b < inst_batch_count; b++) {
+            const inst_batch_t *batch = &g.inst_batches[b];
+            const gpu_mesh_t   *mesh  = &g.meshes[batch->mesh];
+            VkBuffer   vbufs[2]   = {mesh->vertex_buffer, g.inst_vbuf[g.frame]};
+            VkDeviceSize offs[2]  = {0, (VkDeviceSize)batch->first * sizeof(mat4_t)};
+            vkCmdBindVertexBuffers(cmd, 0, 2, vbufs, offs);
+            vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, mesh->index_count, batch->count, 0, 0, 0);
+        }
     }
     vkCmdEndRendering(cmd);
 
@@ -1811,6 +2113,31 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
         vkCmdDrawIndexed(cmd, mesh->index_count, 1, 0, 0, 0);
     }
 
+    /* Instanced colour draws. */
+    if (inst_batch_count > 0) {
+        VkPipeline ip = (g.wireframe && g.inst_wireframe_pipeline)
+                        ? g.inst_wireframe_pipeline : g.inst_pipeline;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ip);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                g.inst_layout, 1, 1,
+                                &g.scene_sets[g.frame], 0, NULL);
+        mat4_t vp = mat4_mul(g.proj, g.view);
+        vkCmdPushConstants(cmd, g.inst_layout, VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(mat4_t), &vp);
+        for (uint32_t b = 0; b < inst_batch_count; b++) {
+            const inst_batch_t *batch = &g.inst_batches[b];
+            const gpu_mesh_t   *mesh  = &g.meshes[batch->mesh];
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    g.inst_layout, 0, 1,
+                                    &g.materials[batch->material].set, 0, NULL);
+            VkBuffer   vbufs[2]   = {mesh->vertex_buffer, g.inst_vbuf[g.frame]};
+            VkDeviceSize offs[2]  = {0, (VkDeviceSize)batch->first * sizeof(mat4_t)};
+            vkCmdBindVertexBuffers(cmd, 0, 2, vbufs, offs);
+            vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, mesh->index_count, batch->count, 0, 0, 0);
+        }
+    }
+
     /* Debug text overlay: a positive-height viewport (top-left origin, +y
        down) so it draws upright regardless of the cube's flipped viewport. */
     if (text_verts > 0) {
@@ -1867,8 +2194,8 @@ bool render_init(window_t *window) {
         !create_device() || !create_swapchain() || !create_depth_resources() ||
         !create_material_infra() || !create_scene_infra() ||
         !create_shadow_pipeline() ||
-        !create_pipeline() || !create_text_pipeline() ||
-        !create_commands_and_sync()) {
+        !create_pipeline() || !create_inst_pipelines() ||
+        !create_text_pipeline() || !create_commands_and_sync()) {
         return false;
     }
 
@@ -1877,9 +2204,10 @@ bool render_init(window_t *window) {
     }
 
     g.instances = malloc(sizeof(mesh_instance_t) * MAX_INSTANCES);
-    if (!g.instances) {
-        return false;
-    }
+    if (!g.instances) return false;
+
+    g.inst_models = malloc(sizeof(mat4_t) * MAX_INST_TOTAL);
+    if (!g.inst_models) return false;
 
     /* Built-in 1x1 white albedo and flat normal map, created after the command
        pool so render_upload_texture can use single-time command buffers. */
@@ -2229,6 +2557,10 @@ void render_draw(void) {
     uint32_t instance_count = g.instance_count;
     g.instance_count = 0;
     g.point_light_count = 0;
+    uint32_t inst_batch_count = g.inst_batch_count;
+    uint32_t inst_model_count = g.inst_model_count;
+    g.inst_batch_count = 0;
+    g.inst_model_count = 0;
     uint32_t text_verts = g.text_vert_count;
     g.text_vert_count = 0;
 
@@ -2268,7 +2600,8 @@ void render_draw(void) {
 
     VkCommandBuffer cmd = g.command_buffers[g.frame];
     vkResetCommandBuffer(cmd, 0);
-    record_command_buffer(cmd, image_index, instance_count, text_verts);
+    record_command_buffer(cmd, image_index, instance_count,
+                          inst_batch_count, inst_model_count, text_verts);
 
     VkPipelineStageFlags wait_stage =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -2365,6 +2698,17 @@ void render_shutdown(void) {
     }
     free(g.text_verts);
     free(g.instances);
+    free(g.inst_models);
+
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroyBuffer(g.device, g.inst_vbuf[i], NULL);
+        vkFreeMemory(g.device, g.inst_vmem[i], NULL);
+    }
+    if (g.inst_wireframe_pipeline)
+        vkDestroyPipeline(g.device, g.inst_wireframe_pipeline, NULL);
+    vkDestroyPipeline(g.device, g.inst_pipeline, NULL);
+    vkDestroyPipeline(g.device, g.shadow_inst_pipeline, NULL);
+    vkDestroyPipelineLayout(g.device, g.inst_layout, NULL);
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(g.device, g.image_available[i], NULL);

@@ -54,6 +54,15 @@ void render_set_camera(mat4_t view, mat4_t proj);
    render_draw; the queue is cleared every frame. */
 void render_mesh(mesh_handle_t mesh, material_handle_t material, mat4_t model);
 
+/* Draw `count` instances of a mesh in a single GPU call. Each entry in
+   `models` is a model matrix. Both shadow and colour passes are instanced.
+   The queue is cleared every frame. Up to RENDER_MAX_INST_TOTAL matrices
+   and RENDER_MAX_INST_BATCHES separate render_mesh_instanced calls per frame. */
+#define RENDER_MAX_INST_TOTAL   16384
+#define RENDER_MAX_INST_BATCHES    64
+void render_mesh_instanced(mesh_handle_t mesh, material_handle_t material,
+                           const mat4_t *models, uint32_t count);
+
 /* Queue a line of debug text, positioned in screen pixels with a top-left
    origin and +y pointing down. Each glyph is scale*8 px tall. Drawn on top of
    the frame with no depth test. Call before render_draw; the queue is cleared

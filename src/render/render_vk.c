@@ -74,12 +74,13 @@ typedef struct {
     float base_color[4];
 } material_ubo_t;
 
-/* Per-frame scene uniform: light direction, key-light colour and ambient fill.
-   All vec4 so std140 packing is trivial (no hidden padding between members). */
+/* Per-frame scene uniform: light direction, key-light colour, ambient fill,
+   and camera world position for specular.  All vec4 for trivial std140. */
 typedef struct {
     float light_dir[4];     /* xyz: unit direction toward the key light */
     float light_color[4];   /* xyz: RGB intensity of the key light */
     float ambient_color[4]; /* xyz: ambient fill RGB */
+    float view_pos[4];      /* xyz: camera world-space position */
 } scene_ubo_t;
 
 /* One queued draw: which mesh + material, plus the matrices the shader needs. */
@@ -124,6 +125,9 @@ static struct {
 
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
+    VkPipeline wireframe_pipeline; /* VK_POLYGON_MODE_LINE variant */
+    bool wireframe;
+    bool wireframe_supported;
 
     VkCommandPool command_pool;
     VkCommandBuffer command_buffers[MAX_FRAMES_IN_FLIGHT];
@@ -509,13 +513,24 @@ static bool create_device(void) {
 
     const char *device_ext[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
+    VkPhysicalDeviceFeatures supported = {0};
+    vkGetPhysicalDeviceFeatures(g.physical_device, &supported);
+    g.wireframe_supported = (supported.fillModeNonSolid == VK_TRUE);
+
     VkPhysicalDeviceVulkan13Features features13 = {0};
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     features13.dynamicRendering = VK_TRUE;
 
+    /* Use PhysicalDeviceFeatures2 so we can enable base features alongside
+       the Vulkan 1.3 chain; pEnabledFeatures must be NULL in this case. */
+    VkPhysicalDeviceFeatures2 features2 = {0};
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features2.pNext = &features13;
+    features2.features.fillModeNonSolid = supported.fillModeNonSolid;
+
     VkDeviceCreateInfo info = {0};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    info.pNext = &features13;
+    info.pNext = &features2;
     info.queueCreateInfoCount = queue_count;
     info.pQueueCreateInfos = queue_infos;
     info.enabledExtensionCount = 1;
@@ -816,7 +831,9 @@ static bool create_scene_infra(void) {
 /* pipeline                                                                  */
 /* ----------------------------------------------------------------------- */
 
-static bool create_pipeline(void) {
+/* Create one mesh pipeline variant.  The layout must already be in
+   g.pipeline_layout.  poly_mode selects fill vs wireframe. */
+static bool build_mesh_pipeline(VkPolygonMode poly_mode, VkPipeline *out) {
     VkShaderModule vert, frag;
     if (!create_shader_module("mesh.vert", &vert) ||
         !create_shader_module("mesh.frag", &frag)) {
@@ -824,136 +841,125 @@ static bool create_pipeline(void) {
     }
 
     VkPipelineShaderStageCreateInfo stages[2] = {0};
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
     stages[0].module = vert;
-    stages[0].pName = "main";
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[0].pName  = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
     stages[1].module = frag;
-    stages[1].pName = "main";
+    stages[1].pName  = "main";
 
     VkVertexInputBindingDescription binding = {0};
-    binding.binding = 0;
-    binding.stride = sizeof(mesh_vertex_t);
+    binding.binding   = 0;
+    binding.stride    = sizeof(mesh_vertex_t);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
     VkVertexInputAttributeDescription attrs[3] = {0};
-    attrs[0].location = 0;
-    attrs[0].binding = 0;
-    attrs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attrs[0].offset = offsetof(mesh_vertex_t, position);
-    attrs[1].location = 1;
-    attrs[1].binding = 0;
-    attrs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attrs[1].offset = offsetof(mesh_vertex_t, normal);
-    attrs[2].location = 2;
-    attrs[2].binding = 0;
-    attrs[2].format = VK_FORMAT_R32G32_SFLOAT;
-    attrs[2].offset = offsetof(mesh_vertex_t, uv);
+    attrs[0] = (VkVertexInputAttributeDescription){0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(mesh_vertex_t, position)};
+    attrs[1] = (VkVertexInputAttributeDescription){1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(mesh_vertex_t, normal)};
+    attrs[2] = (VkVertexInputAttributeDescription){2, 0, VK_FORMAT_R32G32_SFLOAT,    offsetof(mesh_vertex_t, uv)};
 
     VkPipelineVertexInputStateCreateInfo vertex_input = {0};
-    vertex_input.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertex_input.vertexBindingDescriptionCount = 1;
-    vertex_input.pVertexBindingDescriptions = &binding;
+    vertex_input.sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertex_input.vertexBindingDescriptionCount   = 1;
+    vertex_input.pVertexBindingDescriptions      = &binding;
     vertex_input.vertexAttributeDescriptionCount = 3;
-    vertex_input.pVertexAttributeDescriptions = attrs;
+    vertex_input.pVertexAttributeDescriptions    = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo input_assembly = {0};
-    input_assembly.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
     VkPipelineViewportStateCreateInfo viewport_state = {0};
-    viewport_state.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewport_state.viewportCount = 1;
-    viewport_state.scissorCount = 1;
+    viewport_state.scissorCount  = 1;
 
     VkPipelineRasterizationStateCreateInfo raster = {0};
-    raster.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    raster.polygonMode = VK_POLYGON_MODE_FILL;
-    raster.cullMode = VK_CULL_MODE_NONE; /* v1: no culling, see render notes */
-    raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    raster.lineWidth = 1.0f;
+    raster.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    raster.polygonMode = poly_mode;
+    raster.cullMode    = VK_CULL_MODE_NONE; /* no culling: viewport Y-flip reverses winding */
+    raster.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    raster.lineWidth   = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisample = {0};
-    multisample.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisample.rasterizationSamples  = VK_SAMPLE_COUNT_1_BIT;
 
     VkPipelineDepthStencilStateCreateInfo depth = {0};
-    depth.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depth.depthTestEnable = VK_TRUE;
+    depth.sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depth.depthTestEnable  = VK_TRUE;
     depth.depthWriteEnable = VK_TRUE;
-    depth.depthCompareOp = VK_COMPARE_OP_LESS;
+    depth.depthCompareOp   = VK_COMPARE_OP_LESS;
 
     VkPipelineColorBlendAttachmentState blend_attach = {0};
-    blend_attach.colorWriteMask =
-        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blend_attach.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                  VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
     VkPipelineColorBlendStateCreateInfo blend = {0};
-    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     blend.attachmentCount = 1;
-    blend.pAttachments = &blend_attach;
+    blend.pAttachments    = &blend_attach;
 
-    VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT,
-                                       VK_DYNAMIC_STATE_SCISSOR};
+    VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamic = {0};
-    dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
     dynamic.dynamicStateCount = 2;
-    dynamic.pDynamicStates = dynamic_states;
-
-    VkPushConstantRange push = {0};
-    push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    push.offset = 0;
-    push.size = sizeof(mesh_push_t);
-
-    VkDescriptorSetLayout set_layouts[] = {g.material_set_layout,
-                                           g.scene_set_layout};
-    VkPipelineLayoutCreateInfo layout = {0};
-    layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layout.setLayoutCount = 2;
-    layout.pSetLayouts = set_layouts;
-    layout.pushConstantRangeCount = 1;
-    layout.pPushConstantRanges = &push;
-    VK_CHECK(
-        vkCreatePipelineLayout(g.device, &layout, NULL, &g.pipeline_layout));
+    dynamic.pDynamicStates    = dynamic_states;
 
     VkPipelineRenderingCreateInfo rendering = {0};
-    rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    rendering.colorAttachmentCount = 1;
+    rendering.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering.colorAttachmentCount    = 1;
     rendering.pColorAttachmentFormats = &g.swapchain_format;
-    rendering.depthAttachmentFormat = g.depth_format;
+    rendering.depthAttachmentFormat   = g.depth_format;
 
     VkGraphicsPipelineCreateInfo info = {0};
-    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    info.pNext = &rendering;
-    info.stageCount = 2;
-    info.pStages = stages;
-    info.pVertexInputState = &vertex_input;
+    info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.pNext               = &rendering;
+    info.stageCount          = 2;
+    info.pStages             = stages;
+    info.pVertexInputState   = &vertex_input;
     info.pInputAssemblyState = &input_assembly;
-    info.pViewportState = &viewport_state;
+    info.pViewportState      = &viewport_state;
     info.pRasterizationState = &raster;
-    info.pMultisampleState = &multisample;
-    info.pDepthStencilState = &depth;
-    info.pColorBlendState = &blend;
-    info.pDynamicState = &dynamic;
-    info.layout = g.pipeline_layout;
-    info.renderPass = VK_NULL_HANDLE; /* dynamic rendering */
+    info.pMultisampleState   = &multisample;
+    info.pDepthStencilState  = &depth;
+    info.pColorBlendState    = &blend;
+    info.pDynamicState       = &dynamic;
+    info.layout              = g.pipeline_layout;
+    info.renderPass          = VK_NULL_HANDLE; /* dynamic rendering */
 
     VkResult res = vkCreateGraphicsPipelines(g.device, VK_NULL_HANDLE, 1, &info,
-                                             NULL, &g.pipeline);
+                                             NULL, out);
     vkDestroyShaderModule(g.device, vert, NULL);
     vkDestroyShaderModule(g.device, frag, NULL);
     if (res != VK_SUCCESS) {
-        fprintf(stderr, "[render] pipeline creation failed: %d\n", res);
+        fprintf(stderr, "[render] mesh pipeline creation failed: %d\n", res);
         return false;
     }
+    return true;
+}
+
+static bool create_pipeline(void) {
+    VkPushConstantRange push = {0};
+    push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    push.size       = sizeof(mesh_push_t);
+
+    VkDescriptorSetLayout set_layouts[] = {g.material_set_layout, g.scene_set_layout};
+    VkPipelineLayoutCreateInfo layout = {0};
+    layout.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout.setLayoutCount         = 2;
+    layout.pSetLayouts            = set_layouts;
+    layout.pushConstantRangeCount = 1;
+    layout.pPushConstantRanges    = &push;
+    VK_CHECK(vkCreatePipelineLayout(g.device, &layout, NULL, &g.pipeline_layout));
+
+    if (!build_mesh_pipeline(VK_POLYGON_MODE_FILL, &g.pipeline))
+        return false;
+    if (g.wireframe_supported &&
+        !build_mesh_pipeline(VK_POLYGON_MODE_LINE, &g.wireframe_pipeline))
+        return false;
     return true;
 }
 
@@ -1234,6 +1240,12 @@ static void image_barrier(VkCommandBuffer cmd, VkImage image,
 void render_set_camera(mat4_t view, mat4_t proj) {
     g.view = view;
     g.proj = proj;
+    /* Camera world position = translation column of inverse(view). */
+    mat4_t inv = mat4_inverse(view);
+    g.scene_data.view_pos[0] = inv.m[12];
+    g.scene_data.view_pos[1] = inv.m[13];
+    g.scene_data.view_pos[2] = inv.m[14];
+    g.scene_data.view_pos[3] = 1.0f;
 }
 
 void render_mesh(mesh_handle_t mesh, material_handle_t material, mat4_t model) {
@@ -1406,7 +1418,9 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     scissor.extent = g.extent;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g.pipeline);
+    VkPipeline mesh_pipe = (g.wireframe && g.wireframe_pipeline)
+                           ? g.wireframe_pipeline : g.pipeline;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mesh_pipe);
 
     memcpy(g.scene_ubo_mapped[g.frame], &g.scene_data, sizeof(g.scene_data));
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1777,6 +1791,12 @@ void render_draw(void) {
     g.frame = (g.frame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
+void render_set_wireframe(bool enabled) {
+    g.wireframe = enabled && g.wireframe_supported;
+}
+
+bool render_get_wireframe(void) { return g.wireframe; }
+
 void render_set_vsync(bool enabled) {
     VkPresentModeKHR mode = choose_present_mode(enabled);
     if (mode == g.present_mode) return;
@@ -1838,6 +1858,8 @@ void render_shutdown(void) {
 
     vkDestroyPipeline(g.device, g.text_pipeline, NULL);
     vkDestroyPipelineLayout(g.device, g.text_layout, NULL);
+    if (g.wireframe_pipeline)
+        vkDestroyPipeline(g.device, g.wireframe_pipeline, NULL);
     vkDestroyPipeline(g.device, g.pipeline, NULL);
     vkDestroyPipelineLayout(g.device, g.pipeline_layout, NULL);
 

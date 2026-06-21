@@ -610,6 +610,9 @@ static void build_ui(app_t *app) {
     ui_checkbox(&app->ui, "vsync", &app->vsync);
     if (app->vsync != prev_vsync) render_set_vsync(app->vsync);
     ui_slider_float(&app->ui, "fps limit", &app->fps_limit, 0.0f, 240.0f);
+    bool prev_wire = app->wireframe;
+    ui_checkbox(&app->ui, "wireframe", &app->wireframe);
+    if (app->wireframe != prev_wire) render_set_wireframe(app->wireframe);
     ui_text(&app->ui, "cam  y%.0f p%.0f d%.1f",
             (double)kln_degrees(app->camera.yaw),
             (double)kln_degrees(app->camera.pitch),

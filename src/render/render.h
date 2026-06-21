@@ -84,5 +84,10 @@ void render_shutdown(void);
    When disabled, prefers MAILBOX (no tearing, low latency) and falls
    back to IMMEDIATE if MAILBOX is unsupported. Takes effect on the
    next rendered frame; safe to call between render_draw calls. */
+/* Toggle wireframe rendering (VK_POLYGON_MODE_LINE). Falls back to fill if the
+   device does not support fillModeNonSolid. */
+void render_set_wireframe(bool enabled);
+bool render_get_wireframe(void);
+
 void render_set_vsync(bool enabled);
 bool render_get_vsync(void);

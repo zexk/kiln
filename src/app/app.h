@@ -85,6 +85,7 @@ typedef struct {
     float bg_color[3];
     bool  vsync;      /* mirrors the renderer present mode */
     float fps_limit;  /* Hz; 0 = unlimited */
+    bool  wireframe;
 
     /* directional light, set each frame from these spherical coordinates */
     float light_yaw;         /* degrees: horizontal rotation of the sun */

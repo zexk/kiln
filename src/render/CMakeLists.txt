@@ -14,7 +14,7 @@ if(KILN_RENDERER STREQUAL "vulkan")
                     fullscreen.vert bloom_threshold.frag bloom_blur.frag bloom_composite.frag
                     skybox.vert skybox.frag
                     text.vert text.frag
-                    particles.comp)
+                    particles.comp cull.comp)
         add_custom_command(
             OUTPUT  ${shader_out_dir}/${shader}.spv
             COMMAND ${GLSLC} ${shader_src_dir}/${shader}

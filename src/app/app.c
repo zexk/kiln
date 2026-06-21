@@ -215,6 +215,19 @@ bool app_init(app_t *app) {
 
     build_scene(app); /* may set an initial selection */
 
+    /* Instanced cubes on the ground plane — exercises GPU cull + indirect draw. */
+    app->inst_mesh = RENDER_MESH_INVALID;
+    app->inst_mat  = RENDER_MATERIAL_INVALID;
+    {
+        cpu_mesh_t cube = {0};
+        if (cpu_mesh_cube(&cube)) {
+            app->inst_mesh = render_upload_mesh(&cube);
+            cpu_mesh_free(&cube);
+            app->inst_mat = render_create_material(
+                (vec4_t){0.2f, 0.7f, 0.9f, 1.0f}, RENDER_TEXTURE_INVALID);
+        }
+    }
+
     /* GPU particle emitter: small cubes falling under gravity. */
     app->particle_emitter = RENDER_GPU_EMITTER_INVALID;
     {
@@ -296,6 +309,23 @@ static void render_scene(app_t *app) {
         drawn++;
     }
     app->draw_count = drawn;
+
+    /* Instanced ring of blue cubes — exercises the GPU cull + indirect path. */
+    if (app->inst_mesh != RENDER_MESH_INVALID &&
+        app->inst_mat  != RENDER_MATERIAL_INVALID) {
+        static mat4_t ring[16];
+        static bool ring_built = false;
+        if (!ring_built) {
+            ring_built = true;
+            for (int i = 0; i < 16; i++) {
+                float a = (float)i * (6.2831853f / 16.0f);
+                float x = cosf(a) * 8.0f, z = sinf(a) * 8.0f;
+                ring[i] = mat4_from_trs((vec3_t){x, -1.0f, z},
+                                        quat_identity(), (vec3_t){0.4f, 0.4f, 0.4f});
+            }
+        }
+        render_mesh_instanced(app->inst_mesh, app->inst_mat, ring, 16);
+    }
 }
 
 /* Drive the transform gizmo for the selected entity. Runs after the scene's
@@ -877,7 +907,13 @@ void app_run(app_t *app) {
             if (elapsed < target) kln_timer_sleep(target - elapsed);
         }
 
-        if (max_frames && ++frames >= max_frames) {
+        ++frames;
+        if (max_frames && frames == max_frames - 1) {
+            /* Take a screenshot on second-to-last frame for verification. */
+            const char *ss = getenv("KILN_SCREENSHOT");
+            if (ss) render_save_screenshot(ss);
+        }
+        if (max_frames && frames >= max_frames) {
             running = false;
         }
     }

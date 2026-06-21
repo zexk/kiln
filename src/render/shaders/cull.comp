@@ -1,0 +1,90 @@
+#version 450
+
+/* GPU frustum culling for instanced mesh draws.
+   Each invocation handles one instance.  Surviving instances are atomically
+   compacted into each batch's reserved region of the output matrix buffer, and
+   the batch's VkDrawIndexedIndirectCommand.instanceCount is updated. */
+
+struct CullInstance {
+    mat4 model;      /* 64 bytes */
+    uint batch_idx;
+    uint _p0, _p1, _p2; /* padding to 80 bytes */
+};
+
+struct CullBatch {
+    vec3 bounds_min; /* local AABB min */
+    uint first;      /* output base offset in out_matrices[] */
+    vec3 bounds_max; /* local AABB max */
+    uint count;      /* max instances (input count, bounds the atomic) */
+};
+
+/* VkDrawIndexedIndirectCommand — 5 uints = 20 bytes, std430 stride 20. */
+struct DrawCmd {
+    uint index_count;
+    uint instance_count; /* ← atomically incremented */
+    uint first_index;
+    uint vertex_offset;
+    uint first_instance; /* = batch.first, set by CPU */
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer InstBuf  { CullInstance instances[]; };
+layout(std430, set = 0, binding = 1) readonly buffer BatchBuf { CullBatch    batches[];   };
+layout(std430, set = 0, binding = 2)          buffer OutBuf   { mat4         out_matrices[]; };
+layout(std430, set = 0, binding = 3)          buffer CmdBuf   { DrawCmd      cmds[];         };
+
+layout(push_constant) uniform PC {
+    vec4     planes[6];        /* 96 bytes: frustum planes (inward normals, a,b,c,d) */
+    uint     total_instances;
+    uint     batch_count;
+    uint     _pad[2];
+} pc;
+
+layout(local_size_x = 64) in;
+
+bool frustum_test(vec3 world_min, vec3 world_max) {
+    for (int i = 0; i < 6; i++) {
+        vec3 n = pc.planes[i].xyz;
+        /* p-vertex: corner most along plane normal */
+        vec3 p = vec3(
+            n.x > 0.0 ? world_max.x : world_min.x,
+            n.y > 0.0 ? world_max.y : world_min.y,
+            n.z > 0.0 ? world_max.z : world_min.z
+        );
+        if (dot(n, p) + pc.planes[i].w < 0.0)
+            return false;
+    }
+    return true;
+}
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= pc.total_instances) return;
+
+    CullInstance ci = instances[id];
+    uint b = ci.batch_idx;
+    if (b >= pc.batch_count) return;
+
+    CullBatch batch = batches[b];
+
+    /* Transform local AABB to world space by testing all 8 corners. */
+    vec3 world_min = vec3( 1e30);
+    vec3 world_max = vec3(-1e30);
+    for (int i = 0; i < 8; i++) {
+        vec3 corner = vec3(
+            (i & 1) != 0 ? batch.bounds_max.x : batch.bounds_min.x,
+            (i & 2) != 0 ? batch.bounds_max.y : batch.bounds_min.y,
+            (i & 4) != 0 ? batch.bounds_max.z : batch.bounds_min.z
+        );
+        vec3 w = (ci.model * vec4(corner, 1.0)).xyz;
+        world_min = min(world_min, w);
+        world_max = max(world_max, w);
+    }
+
+    if (!frustum_test(world_min, world_max)) return;
+
+    /* Claim a slot in the batch's output region. */
+    uint slot = atomicAdd(cmds[b].instance_count, 1u);
+    if (slot < batch.count) {
+        out_matrices[batch.first + slot] = ci.model;
+    }
+}

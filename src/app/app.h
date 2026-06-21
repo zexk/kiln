@@ -109,6 +109,10 @@ typedef struct {
     int   frame_ms_head;
 
     gpu_emitter_handle_t particle_emitter;
+
+    /* Instanced ground-plane cubes — exercises the GPU cull + indirect path. */
+    mesh_handle_t     inst_mesh;
+    material_handle_t inst_mat;
 } app_t;
 
 bool app_init(app_t *app);

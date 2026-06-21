@@ -204,6 +204,31 @@ typedef struct {
     uint32_t _pad[2];
 } particle_push_t;
 
+/* ---- GPU-driven instanced culling + indirect ---- */
+
+/* Per-instance input to cull.comp: model matrix + which batch this belongs to. */
+typedef struct {
+    mat4_t   model;
+    uint32_t batch_idx;
+    uint32_t _pad[3];
+} cull_inst_t; /* 80 bytes, std430 aligned */
+
+/* Per-batch input to cull.comp: mesh AABB + output region info. */
+typedef struct {
+    float    bounds_min[3];
+    uint32_t first;    /* base slot in the output matrix buffer */
+    float    bounds_max[3];
+    uint32_t count;    /* max instances (caps the atomic) */
+} cull_batch_t; /* 32 bytes */
+
+/* Push constants for cull.comp (112 bytes). */
+typedef struct {
+    float    planes[6][4]; /* 6 frustum planes as vec4(a,b,c,d) */
+    uint32_t total_instances;
+    uint32_t batch_count;
+    uint32_t _pad[2];
+} cull_push_t;
+
 static struct {
     window_t *window;
 
@@ -374,6 +399,28 @@ static struct {
 
     /* Screenshot: if path is non-empty, save the next frame's color_image. */
     char screenshot_path[512];
+
+    /* GPU-driven instanced culling + indirect draw. */
+    VkBuffer       cull_inst_buf[MAX_FRAMES_IN_FLIGHT];    /* input: instances (HOST_VISIBLE) */
+    VkDeviceMemory cull_inst_mem[MAX_FRAMES_IN_FLIGHT];
+    void          *cull_inst_mapped[MAX_FRAMES_IN_FLIGHT];
+
+    VkBuffer       cull_batch_buf[MAX_FRAMES_IN_FLIGHT];   /* input: batch AABBs (HOST_VISIBLE) */
+    VkDeviceMemory cull_batch_mem[MAX_FRAMES_IN_FLIGHT];
+    void          *cull_batch_mapped[MAX_FRAMES_IN_FLIGHT];
+
+    VkBuffer       cull_out_buf[MAX_FRAMES_IN_FLIGHT];     /* output: compact matrices (DEVICE_LOCAL) */
+    VkDeviceMemory cull_out_mem[MAX_FRAMES_IN_FLIGHT];
+
+    VkBuffer       cull_indirect_buf[MAX_FRAMES_IN_FLIGHT];/* output: draw args (HOST_VISIBLE+INDIRECT) */
+    VkDeviceMemory cull_indirect_mem[MAX_FRAMES_IN_FLIGHT];
+    void          *cull_indirect_mapped[MAX_FRAMES_IN_FLIGHT];
+
+    VkDescriptorSetLayout cull_set_layout;
+    VkDescriptorPool      cull_pool;
+    VkPipelineLayout      cull_layout;
+    VkPipeline            cull_pipeline;
+    VkDescriptorSet       cull_sets[MAX_FRAMES_IN_FLIGHT];
 
     /* GPU particle emitters. */
     gpu_emitter_t      gpu_emitters[MAX_GPU_EMITTERS];
@@ -1941,6 +1988,120 @@ static bool create_inst_pipelines(void) {
     return true;
 }
 
+static bool create_cull_pipeline(void) {
+    VkDescriptorSetLayoutBinding bindings[4] = {0};
+    for (int i = 0; i < 4; i++) {
+        bindings[i].binding         = (uint32_t)i;
+        bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo dslci = {0};
+    dslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dslci.bindingCount = 4;
+    dslci.pBindings    = bindings;
+    VK_CHECK(vkCreateDescriptorSetLayout(g.device, &dslci, NULL, &g.cull_set_layout));
+
+    VkDescriptorPoolSize pool_size = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                      MAX_FRAMES_IN_FLIGHT * 4};
+    VkDescriptorPoolCreateInfo dpci = {0};
+    dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpci.maxSets       = MAX_FRAMES_IN_FLIGHT;
+    dpci.poolSizeCount = 1;
+    dpci.pPoolSizes    = &pool_size;
+    VK_CHECK(vkCreateDescriptorPool(g.device, &dpci, NULL, &g.cull_pool));
+
+    VkPushConstantRange push = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cull_push_t)};
+    VkPipelineLayoutCreateInfo plci = {0};
+    plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.setLayoutCount         = 1;
+    plci.pSetLayouts            = &g.cull_set_layout;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges    = &push;
+    VK_CHECK(vkCreatePipelineLayout(g.device, &plci, NULL, &g.cull_layout));
+
+    VkShaderModule cs;
+    if (!create_shader_module("cull.comp", &cs)) return false;
+    VkPipelineShaderStageCreateInfo stage = {0};
+    stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = cs;
+    stage.pName  = "main";
+    VkComputePipelineCreateInfo cpci = {0};
+    cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpci.stage  = stage;
+    cpci.layout = g.cull_layout;
+    VkResult res = vkCreateComputePipelines(g.device, VK_NULL_HANDLE, 1, &cpci, NULL,
+                                            &g.cull_pipeline);
+    vkDestroyShaderModule(g.device, cs, NULL);
+    if (res != VK_SUCCESS) {
+        fprintf(stderr, "[render] cull compute pipeline failed: %d\n", res);
+        return false;
+    }
+
+    /* Allocate per-frame buffers and descriptor sets. */
+    VkDeviceSize inst_size     = (VkDeviceSize)MAX_INST_TOTAL   * sizeof(cull_inst_t);
+    VkDeviceSize batch_size    = (VkDeviceSize)MAX_INST_BATCHES * sizeof(cull_batch_t);
+    VkDeviceSize out_size      = (VkDeviceSize)MAX_INST_TOTAL   * sizeof(mat4_t);
+    VkDeviceSize indirect_size = (VkDeviceSize)MAX_INST_BATCHES * sizeof(VkDrawIndexedIndirectCommand);
+
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; f++) {
+        if (!create_buffer(inst_size,
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           &g.cull_inst_buf[f], &g.cull_inst_mem[f])) return false;
+        VK_CHECK(vkMapMemory(g.device, g.cull_inst_mem[f], 0, VK_WHOLE_SIZE, 0,
+                             &g.cull_inst_mapped[f]));
+
+        if (!create_buffer(batch_size,
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           &g.cull_batch_buf[f], &g.cull_batch_mem[f])) return false;
+        VK_CHECK(vkMapMemory(g.device, g.cull_batch_mem[f], 0, VK_WHOLE_SIZE, 0,
+                             &g.cull_batch_mapped[f]));
+
+        if (!create_buffer(out_size,
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                           &g.cull_out_buf[f], &g.cull_out_mem[f])) return false;
+
+        if (!create_buffer(indirect_size,
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           &g.cull_indirect_buf[f], &g.cull_indirect_mem[f])) return false;
+        VK_CHECK(vkMapMemory(g.device, g.cull_indirect_mem[f], 0, VK_WHOLE_SIZE, 0,
+                             &g.cull_indirect_mapped[f]));
+    }
+
+    VkDescriptorSetLayout layouts[MAX_FRAMES_IN_FLIGHT] = {g.cull_set_layout, g.cull_set_layout};
+    VkDescriptorSetAllocateInfo dsai = {0};
+    dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsai.descriptorPool     = g.cull_pool;
+    dsai.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    dsai.pSetLayouts        = layouts;
+    VK_CHECK(vkAllocateDescriptorSets(g.device, &dsai, g.cull_sets));
+
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; f++) {
+        VkDescriptorBufferInfo bufs[4] = {
+            {g.cull_inst_buf[f],     0, inst_size},
+            {g.cull_batch_buf[f],    0, batch_size},
+            {g.cull_out_buf[f],      0, out_size},
+            {g.cull_indirect_buf[f], 0, indirect_size},
+        };
+        VkWriteDescriptorSet writes[4] = {0};
+        for (int b = 0; b < 4; b++) {
+            writes[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[b].dstSet          = g.cull_sets[f];
+            writes[b].dstBinding      = (uint32_t)b;
+            writes[b].descriptorCount = 1;
+            writes[b].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[b].pBufferInfo     = &bufs[b];
+        }
+        vkUpdateDescriptorSets(g.device, 4, writes, 0, NULL);
+    }
+    return true;
+}
+
 static bool create_particle_pipeline(void) {
     VkDescriptorSetLayoutBinding bindings[4] = {0};
     for (int i = 0; i < 4; i++) {
@@ -2684,10 +2845,46 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
                sizeof(cascade_vp[c].m));
     }
 
-    /* Upload instance models before the shadow passes. */
-    if (inst_model_count > 0)
-        memcpy(g.inst_vmapped[g.frame], g.inst_models,
-               sizeof(mat4_t) * inst_model_count);
+    /* GPU frustum culling: dispatch before shadow so both shadow and color passes
+       use the compacted cull_out_buf instead of the raw inst_vbuf. */
+    if (inst_batch_count > 0) {
+        /* Make CPU writes (inst + batch inputs, instanceCount reset) visible. */
+        VkMemoryBarrier hbar = {VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                                NULL,
+                                VK_ACCESS_HOST_WRITE_BIT,
+                                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             0, 1, &hbar, 0, NULL, 0, NULL);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.cull_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                g.cull_layout, 0, 1, &g.cull_sets[g.frame], 0, NULL);
+
+        cull_push_t cp = {0};
+        for (int i = 0; i < 6; i++) {
+            cp.planes[i][0] = g.frustum.planes[i].a;
+            cp.planes[i][1] = g.frustum.planes[i].b;
+            cp.planes[i][2] = g.frustum.planes[i].c;
+            cp.planes[i][3] = g.frustum.planes[i].d;
+        }
+        cp.total_instances = inst_model_count;
+        cp.batch_count     = inst_batch_count;
+        vkCmdPushConstants(cmd, g.cull_layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(cp), &cp);
+        vkCmdDispatch(cmd, (inst_model_count + 63) / 64, 1, 1);
+
+        /* cull_out_buf + cull_indirect_buf writes visible to draw pipeline. */
+        VkMemoryBarrier cbar = {VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                                NULL,
+                                VK_ACCESS_SHADER_WRITE_BIT,
+                                VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
+                                VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
+                             VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                             0, 1, &cbar, 0, NULL, 0, NULL);
+    }
 
     /* Transition entire shadow array to depth-attachment for rendering. */
     {
@@ -2752,11 +2949,12 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
             for (uint32_t b = 0; b < inst_batch_count; b++) {
                 const inst_batch_t *batch = &g.inst_batches[b];
                 const gpu_mesh_t   *mesh  = &g.meshes[batch->mesh];
-                VkBuffer   vbufs[2]  = {mesh->vertex_buffer, g.inst_vbuf[g.frame]};
-                VkDeviceSize offs[2] = {0, (VkDeviceSize)batch->first * sizeof(mat4_t)};
+                VkBuffer     vbufs[2] = {mesh->vertex_buffer, g.cull_out_buf[g.frame]};
+                VkDeviceSize offs[2]  = {0, 0};
                 vkCmdBindVertexBuffers(cmd, 0, 2, vbufs, offs);
                 vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(cmd, mesh->index_count, batch->count, 0, 0, 0);
+                vkCmdDrawIndexedIndirect(cmd, g.cull_indirect_buf[g.frame],
+                                         b * sizeof(VkDrawIndexedIndirectCommand), 1, 0);
             }
         }
         vkCmdEndRendering(cmd);
@@ -2978,11 +3176,14 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     g.inst_layout, 0, 1,
                                     &g.materials[batch->material].set, 0, NULL);
-            VkBuffer   vbufs[2]  = {mesh->vertex_buffer, g.inst_vbuf[g.frame]};
-            VkDeviceSize offs[2] = {0, (VkDeviceSize)batch->first * sizeof(mat4_t)};
+            /* Instance VBO is the compute-culled output; firstInstance in the
+               indirect command handles the per-batch base offset. */
+            VkBuffer     vbufs[2] = {mesh->vertex_buffer, g.cull_out_buf[g.frame]};
+            VkDeviceSize offs[2]  = {0, 0};
             vkCmdBindVertexBuffers(cmd, 0, 2, vbufs, offs);
             vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdDrawIndexed(cmd, mesh->index_count, batch->count, 0, 0, 0);
+            vkCmdDrawIndexedIndirect(cmd, g.cull_indirect_buf[g.frame],
+                                     b * sizeof(VkDrawIndexedIndirectCommand), 1, 0);
         }
     }
 
@@ -3210,7 +3411,7 @@ bool render_init(window_t *window) {
         !create_skybox_infra() ||
         !create_shadow_pipeline() ||
         !create_pipeline() || !create_inst_pipelines() ||
-        !create_particle_pipeline() ||
+        !create_cull_pipeline() || !create_particle_pipeline() ||
         !create_text_pipeline() || !create_commands_and_sync()) {
         return false;
     }
@@ -3820,6 +4021,40 @@ void render_draw(void) {
         ((VkDrawIndexedIndirectCommand *)e->indirect_mapped[g.frame])->instanceCount = 0;
     }
 
+    /* Build cull input buffers for this frame's instanced batches. */
+    if (inst_batch_count > 0) {
+        cull_inst_t  *ci  = g.cull_inst_mapped[g.frame];
+        cull_batch_t *cb  = g.cull_batch_mapped[g.frame];
+        VkDrawIndexedIndirectCommand *ic = g.cull_indirect_mapped[g.frame];
+        uint32_t write = 0;
+        for (uint32_t b = 0; b < inst_batch_count; b++) {
+            const inst_batch_t *batch = &g.inst_batches[b];
+            const gpu_mesh_t   *mesh  = &g.meshes[batch->mesh];
+            /* Per-batch descriptor. */
+            cb[b].bounds_min[0] = mesh->bounds_min.x;
+            cb[b].bounds_min[1] = mesh->bounds_min.y;
+            cb[b].bounds_min[2] = mesh->bounds_min.z;
+            cb[b].first         = batch->first;
+            cb[b].bounds_max[0] = mesh->bounds_max.x;
+            cb[b].bounds_max[1] = mesh->bounds_max.y;
+            cb[b].bounds_max[2] = mesh->bounds_max.z;
+            cb[b].count         = batch->count;
+            /* Indirect args: CPU sets everything except instanceCount. */
+            ic[b].indexCount    = mesh->index_count;
+            ic[b].instanceCount = 0;   /* ← compute fills this */
+            ic[b].firstIndex    = 0;
+            ic[b].vertexOffset  = 0;
+            ic[b].firstInstance = batch->first; /* VBO reads cull_out_buf[first..] */
+            /* Per-instance data. */
+            for (uint32_t i = 0; i < batch->count; i++, write++) {
+                ci[write].model     = g.inst_models[batch->first + i];
+                ci[write].batch_idx = b;
+                ci[write]._pad[0] = ci[write]._pad[1] = ci[write]._pad[2] = 0;
+            }
+        }
+        (void)write;
+    }
+
     uint32_t image_index;
     VkResult acquire = vkAcquireNextImageKHR(
         g.device, g.swapchain, UINT64_MAX, g.image_available[g.frame],
@@ -3969,6 +4204,25 @@ void render_shutdown(void) {
     vkDestroyPipeline(g.device, g.inst_pipeline, NULL);
     vkDestroyPipeline(g.device, g.shadow_inst_pipeline, NULL);
     vkDestroyPipelineLayout(g.device, g.inst_layout, NULL);
+
+    /* GPU-driven cull infrastructure. */
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; f++) {
+        if (g.cull_inst_mapped[f])     { vkUnmapMemory(g.device, g.cull_inst_mem[f]); }
+        if (g.cull_inst_buf[f])        { vkDestroyBuffer(g.device, g.cull_inst_buf[f], NULL); }
+        if (g.cull_inst_mem[f])        { vkFreeMemory(g.device, g.cull_inst_mem[f], NULL); }
+        if (g.cull_batch_mapped[f])    { vkUnmapMemory(g.device, g.cull_batch_mem[f]); }
+        if (g.cull_batch_buf[f])       { vkDestroyBuffer(g.device, g.cull_batch_buf[f], NULL); }
+        if (g.cull_batch_mem[f])       { vkFreeMemory(g.device, g.cull_batch_mem[f], NULL); }
+        if (g.cull_out_buf[f])         { vkDestroyBuffer(g.device, g.cull_out_buf[f], NULL); }
+        if (g.cull_out_mem[f])         { vkFreeMemory(g.device, g.cull_out_mem[f], NULL); }
+        if (g.cull_indirect_mapped[f]) { vkUnmapMemory(g.device, g.cull_indirect_mem[f]); }
+        if (g.cull_indirect_buf[f])    { vkDestroyBuffer(g.device, g.cull_indirect_buf[f], NULL); }
+        if (g.cull_indirect_mem[f])    { vkFreeMemory(g.device, g.cull_indirect_mem[f], NULL); }
+    }
+    if (g.cull_pipeline)    vkDestroyPipeline(g.device, g.cull_pipeline, NULL);
+    if (g.cull_layout)      vkDestroyPipelineLayout(g.device, g.cull_layout, NULL);
+    if (g.cull_pool)        vkDestroyDescriptorPool(g.device, g.cull_pool, NULL);
+    if (g.cull_set_layout)  vkDestroyDescriptorSetLayout(g.device, g.cull_set_layout, NULL);
 
     /* GPU particle emitters. */
     for (uint32_t i = 0; i < g.gpu_emitter_count; i++)

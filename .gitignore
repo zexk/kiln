@@ -16,3 +16,7 @@ result-*
 # Downloaded test meshes / textures (fetch with assets/models/fetch.sh)
 assets/models/*.obj
 assets/models/*.png
+
+# Runtime-generated saves and kyub block textures (bundled in game source)
+saves/
+game/assets/textures/

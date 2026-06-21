@@ -21,7 +21,7 @@ if(KILN_RENDERER STREQUAL "vulkan")
     endforeach()
     add_custom_target(kiln_shaders DEPENDS ${spv_files})
 
-    add_library(kiln_render STATIC render_vk.c)
+    add_library(kiln_render STATIC render_vk.c particles.c)
     add_dependencies(kiln_render kiln_shaders)
     target_compile_definitions(kiln_render PRIVATE
         KILN_SHADER_DIR="${shader_out_dir}")

@@ -5,7 +5,6 @@
 #include "core.h"
 #include "gizmo.h"
 #include "image.h"
-#include "linalg.h"
 #include "mesh.h"
 #include "obj.h"
 #include "render.h"
@@ -21,7 +20,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 /* Where models/textures live, resolved at runtime (env override, else the
    installed share/kiln/assets, else the build-time source dir). */
@@ -678,6 +676,7 @@ static void build_ui(app_t *app) {
     if (ui_button(&app->ui, "load scene")) { scene_do_load(app); }
     if (app->scene_status[0]) {
         ui_text(&app->ui, "%s", app->scene_status);
+        app->scene_status[0] = '\0';
     }
 
     ui_panel_end(&app->ui);

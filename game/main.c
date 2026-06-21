@@ -31,8 +31,6 @@
 
 /* ── Game-side ui_draw_t: routes to gui.c's renderer.h primitives ─────────── */
 
-static Gui *s_ui_gui; /* set once after gui_init, before first ui_begin */
-
 static void game_ui_rect(void *ud, float x, float y, float w, float h,
                           float r, float g, float b) {
     gui_rect((Gui *)ud, x, y, w, h, r, g, b);
@@ -228,7 +226,6 @@ int main(void) {
 
     Gui gui;
     gui_init(&gui, hud_program);
-    s_ui_gui = &gui;
 
     ui_t debug_ui;
     ui_init(&debug_ui);
@@ -244,7 +241,7 @@ int main(void) {
     pt->position = (vec3){8.0f, 20.0f, 8.0f};
     pt->yaw = -90.0f; pt->pitch = -45.0f;
     C_Movement *pm = entity_add_component(g_ecs, player, COMP_MOVEMENT);
-    pm->velocity = (vec3){0,0,0}; pm->speed = 5.0f; pm->grounded = false;
+    pm->velocity = (vec3){0.0f, 0.0f, 0.0f}; pm->speed = 5.0f; pm->grounded = false;
     C_Health *ph = entity_add_component(g_ecs, player, COMP_HEALTH);
     ph->current = ph->max = 20.0f;
 
@@ -271,7 +268,6 @@ int main(void) {
     window_set_cursor_mode(win, CURSOR_DISABLED);
 
     double last_time       = kln_timer_now();
-    double last_fps_update = 0.0;
     double last_save_flush = 0.0;
     bool   running         = true;
     bool   paused          = false;
@@ -347,7 +343,7 @@ int main(void) {
                 if (vel > 0.3f) vel = 0.3f;
                 vec3 right, up_unused;
                 fps_camera_basis(&camera, &right, &up_unused);
-                vec3 move = {0,0,0};
+                vec3 move = {0.0f, 0.0f, 0.0f};
                 if (game_input.keys['w']) move = vec3_add(move, camera.front);
                 if (game_input.keys['s']) move = vec3_sub(move, camera.front);
                 if (game_input.keys['a']) move = vec3_sub(move, right);
@@ -374,7 +370,7 @@ int main(void) {
         place_cooldown -= (float)dt;
 
         player_transform = entity_get_component(g_ecs, player, COMP_TRANSFORM);
-        vec3 cam_pos = player_transform ? player_transform->position : (vec3){0,0,0};
+        vec3 cam_pos = player_transform ? player_transform->position : (vec3){0.0f, 0.0f, 0.0f};
 
         if (!paused) {
             if (game_input.mouse_left && break_cooldown <= 0.0f) {
@@ -549,7 +545,6 @@ int main(void) {
         }
 
         if (now - last_save_flush >= 5.0) { world_flush_saves(&world); last_save_flush = now; }
-        (void)last_fps_update;
 
         world.render_distance = render_distance;
         renderer_enable(R_CAP_DEPTH_TEST);

@@ -256,16 +256,15 @@ static void load_chunk(World *world, int x, int z) {
 
 static void unload_chunk(World *world, int index) {
     if (!world->chunks[index].active) return;
-    int cx = world->chunks[index].chunk->x;
-    int cz = world->chunks[index].chunk->z;
     if (world->chunks[index].save_dirty) save_chunk_data(&world->chunks[index]);
+    LOG_DEBUG(CAT_WORLD, "Unloaded chunk %d,%d",
+              world->chunks[index].chunk->x, world->chunks[index].chunk->z);
     mesh_free(world->chunks[index].mesh); free(world->chunks[index].mesh);
     free(world->chunks[index].chunk);
     if (world->chunks[index].voxel_tex != R_INVALID_HANDLE)
         renderer_destroy_texture(world->chunks[index].voxel_tex);
     world->chunks[index].active = false;
     world->count--;
-    LOG_DEBUG(CAT_WORLD, "Unloaded chunk %d,%d", cx, cz);
 }
 
 void world_flush_saves(World *world) {

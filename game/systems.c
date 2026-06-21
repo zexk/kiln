@@ -1,7 +1,5 @@
 #include "systems.h"
 #include "components.h"
-#include "query.h"
-#include "signature.h"
 #include "logger.h"
 #include <math.h>
 

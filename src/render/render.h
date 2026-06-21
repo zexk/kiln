@@ -111,3 +111,11 @@ bool render_get_wireframe(void);
 
 void render_set_vsync(bool enabled);
 bool render_get_vsync(void);
+
+/* Bloom post-processing. Default: enabled, threshold=0.8, strength=0.5,
+   exposure=1.0 (Reinhard tone-mapping + gamma applied in composite). */
+void render_set_bloom(bool enabled, float threshold, float strength, float exposure);
+
+/* Write the next frame's HDR color buffer to a PPM file at `path`.
+   Blocks only on that one frame; safe to call between render_draw calls. */
+void render_save_screenshot(const char *path);

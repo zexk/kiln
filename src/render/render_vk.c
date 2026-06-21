@@ -34,8 +34,10 @@
 #define SHADOW_MAP_SIZE   2048
 #define PP_FORMAT         VK_FORMAT_R16G16B16A16_SFLOAT /* HDR offscreen + bloom */
 #define MAX_CUBEMAPS      8
-#define MAX_INST_TOTAL  16384 /* total model matrices across all instanced batches */
-#define MAX_INST_BATCHES   64
+#define MAX_INST_TOTAL     16384
+#define MAX_INST_BATCHES      64
+#define MAX_GPU_EMITTERS       8
+#define MAX_EMIT_PER_FRAME   256
 
 #define VK_CHECK(x)                                                         \
     do {                                                                    \
@@ -135,6 +137,72 @@ typedef struct {
     mat4_t mvp;
     mat4_t model;
 } mesh_push_t;
+
+/* Per-particle state stored in device-local SSBO. std430 layout, 48 bytes.
+   Must match 'struct Particle' in particles.comp exactly. */
+typedef struct {
+    float pos[3];
+    float life;
+    float vel[3];
+    float max_life;
+    float scale;
+    float _pad[3];
+} gpu_particle_t;
+
+typedef struct {
+    mesh_handle_t     mesh;
+    material_handle_t material;
+    uint32_t          capacity;
+    float             gravity_y;
+    bool              active;
+
+    /* Simulation SSBO (device-local; compute reads/writes). */
+    VkBuffer      particle_buf;
+    VkDeviceMemory particle_mem;
+
+    /* Per-frame: matrix output (STORAGE + VERTEX_BUFFER). */
+    VkBuffer      matrix_buf[MAX_FRAMES_IN_FLIGHT];
+    VkDeviceMemory matrix_mem[MAX_FRAMES_IN_FLIGHT];
+
+    /* Per-frame: indirect draw args (HOST_VISIBLE + INDIRECT_BUFFER + STORAGE).
+       Kept host-visible so instance_count can be reset to 0 without a transfer. */
+    VkBuffer      indirect_buf[MAX_FRAMES_IN_FLIGHT];
+    VkDeviceMemory indirect_mem[MAX_FRAMES_IN_FLIGHT];
+    void         *indirect_mapped[MAX_FRAMES_IN_FLIGHT];
+
+    /* Per-frame: staging for CPU-emitted particles (HOST_VISIBLE + STORAGE). */
+    VkBuffer      emit_buf[MAX_FRAMES_IN_FLIGHT];
+    VkDeviceMemory emit_mem[MAX_FRAMES_IN_FLIGHT];
+    void         *emit_mapped[MAX_FRAMES_IN_FLIGHT];
+
+    /* Per-frame compute descriptor sets (different matrix/indirect/emit per frame). */
+    VkDescriptorSet compute_sets[MAX_FRAMES_IN_FLIGHT];
+
+    /* CPU-side emit accumulator (written between render_draw calls). */
+    gpu_particle_t emit_pending[MAX_EMIT_PER_FRAME];
+    uint32_t       emit_pending_count;
+    uint32_t       ring_head; /* next slot to overwrite in particle_buf */
+
+    /* Per-frame snapshot of pending emits (consumed in render_draw). */
+    uint32_t       emit_count[MAX_FRAMES_IN_FLIGHT];
+    uint32_t       emit_ring_head[MAX_FRAMES_IN_FLIGHT];
+
+    float pending_dt;
+    bool  pending;
+} gpu_emitter_t;
+
+typedef struct { uint32_t emitter_idx; } gpu_particle_cmd_t;
+
+/* Push constants for particles.comp (32 bytes). */
+typedef struct {
+    float    dt;
+    float    gravity_y;
+    uint32_t capacity;
+    uint32_t emit_count;
+    uint32_t ring_head;
+    uint32_t mode;     /* 0 = inject, 1 = simulate */
+    uint32_t _pad[2];
+} particle_push_t;
 
 static struct {
     window_t *window;
@@ -306,6 +374,16 @@ static struct {
 
     /* Screenshot: if path is non-empty, save the next frame's color_image. */
     char screenshot_path[512];
+
+    /* GPU particle emitters. */
+    gpu_emitter_t      gpu_emitters[MAX_GPU_EMITTERS];
+    uint32_t           gpu_emitter_count;
+    VkDescriptorSetLayout particle_set_layout;
+    VkDescriptorPool   particle_pool;
+    VkPipelineLayout   particle_layout;
+    VkPipeline         particle_pipeline;
+    gpu_particle_cmd_t particle_cmds[MAX_GPU_EMITTERS];
+    uint32_t           particle_cmd_count;
 } g;
 
 /* ----------------------------------------------------------------------- */
@@ -1863,6 +1941,64 @@ static bool create_inst_pipelines(void) {
     return true;
 }
 
+static bool create_particle_pipeline(void) {
+    VkDescriptorSetLayoutBinding bindings[4] = {0};
+    for (int i = 0; i < 4; i++) {
+        bindings[i].binding         = (uint32_t)i;
+        bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo dslci = {0};
+    dslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dslci.bindingCount = 4;
+    dslci.pBindings    = bindings;
+    VK_CHECK(vkCreateDescriptorSetLayout(g.device, &dslci, NULL, &g.particle_set_layout));
+
+    VkDescriptorPoolSize pool_size = {
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        MAX_GPU_EMITTERS * MAX_FRAMES_IN_FLIGHT * 4
+    };
+    VkDescriptorPoolCreateInfo dpci = {0};
+    dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpci.maxSets       = MAX_GPU_EMITTERS * MAX_FRAMES_IN_FLIGHT;
+    dpci.poolSizeCount = 1;
+    dpci.pPoolSizes    = &pool_size;
+    VK_CHECK(vkCreateDescriptorPool(g.device, &dpci, NULL, &g.particle_pool));
+
+    VkPushConstantRange push = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(particle_push_t)};
+    VkPipelineLayoutCreateInfo plci = {0};
+    plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.setLayoutCount         = 1;
+    plci.pSetLayouts            = &g.particle_set_layout;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges    = &push;
+    VK_CHECK(vkCreatePipelineLayout(g.device, &plci, NULL, &g.particle_layout));
+
+    VkShaderModule cs;
+    if (!create_shader_module("particles.comp", &cs)) return false;
+
+    VkPipelineShaderStageCreateInfo stage = {0};
+    stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = cs;
+    stage.pName  = "main";
+
+    VkComputePipelineCreateInfo cpci = {0};
+    cpci.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpci.stage  = stage;
+    cpci.layout = g.particle_layout;
+
+    VkResult res = vkCreateComputePipelines(g.device, VK_NULL_HANDLE, 1, &cpci, NULL,
+                                            &g.particle_pipeline);
+    vkDestroyShaderModule(g.device, cs, NULL);
+    if (res != VK_SUCCESS) {
+        fprintf(stderr, "[render] particle compute pipeline failed: %d\n", res);
+        return false;
+    }
+    return true;
+}
+
 static bool create_pipeline(void) {
     VkPushConstantRange push = {0};
     push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
@@ -2364,11 +2500,159 @@ void render_mesh_instanced(mesh_handle_t mesh, material_handle_t material,
     g.inst_model_count += count;
 }
 
+/* ---- GPU particle emitters ------------------------------------------------ */
+
+static void destroy_gpu_emitter_resources(gpu_emitter_t *e) {
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; f++) {
+        if (e->emit_mapped[f])    { vkUnmapMemory(g.device, e->emit_mem[f]); e->emit_mapped[f] = NULL; }
+        if (e->emit_buf[f])       { vkDestroyBuffer(g.device, e->emit_buf[f], NULL); e->emit_buf[f] = VK_NULL_HANDLE; }
+        if (e->emit_mem[f])       { vkFreeMemory(g.device, e->emit_mem[f], NULL); e->emit_mem[f] = VK_NULL_HANDLE; }
+        if (e->indirect_mapped[f]){ vkUnmapMemory(g.device, e->indirect_mem[f]); e->indirect_mapped[f] = NULL; }
+        if (e->indirect_buf[f])   { vkDestroyBuffer(g.device, e->indirect_buf[f], NULL); e->indirect_buf[f] = VK_NULL_HANDLE; }
+        if (e->indirect_mem[f])   { vkFreeMemory(g.device, e->indirect_mem[f], NULL); e->indirect_mem[f] = VK_NULL_HANDLE; }
+        if (e->matrix_buf[f])     { vkDestroyBuffer(g.device, e->matrix_buf[f], NULL); e->matrix_buf[f] = VK_NULL_HANDLE; }
+        if (e->matrix_mem[f])     { vkFreeMemory(g.device, e->matrix_mem[f], NULL); e->matrix_mem[f] = VK_NULL_HANDLE; }
+    }
+    if (e->particle_buf) { vkDestroyBuffer(g.device, e->particle_buf, NULL); e->particle_buf = VK_NULL_HANDLE; }
+    if (e->particle_mem) { vkFreeMemory(g.device, e->particle_mem, NULL); e->particle_mem = VK_NULL_HANDLE; }
+    e->active = false;
+}
+
+gpu_emitter_handle_t render_create_gpu_emitter(mesh_handle_t mesh,
+                                               material_handle_t mat,
+                                               uint32_t capacity,
+                                               vec3_t gravity) {
+    if (g.gpu_emitter_count >= MAX_GPU_EMITTERS ||
+        mesh >= g.mesh_count || mat >= g.material_count || capacity == 0)
+        return RENDER_GPU_EMITTER_INVALID;
+
+    uint32_t idx = g.gpu_emitter_count++;
+    gpu_emitter_t *e = &g.gpu_emitters[idx];
+    memset(e, 0, sizeof(*e));
+    e->mesh      = mesh;
+    e->material  = mat;
+    e->capacity  = capacity;
+    e->gravity_y = gravity.y;
+    e->active    = true;
+
+    VkDeviceSize ps = (VkDeviceSize)capacity * sizeof(gpu_particle_t);
+    VkDeviceSize ms = (VkDeviceSize)capacity * sizeof(mat4_t);
+    VkDeviceSize is = sizeof(VkDrawIndexedIndirectCommand);
+    VkDeviceSize es = (VkDeviceSize)MAX_EMIT_PER_FRAME * sizeof(gpu_particle_t);
+
+    /* Particle simulation SSBO: device-local, needs TRANSFER_DST for zero-fill. */
+    if (!create_buffer(ps,
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                       &e->particle_buf, &e->particle_mem)) goto fail;
+    {
+        VkCommandBuffer cmd = begin_single_time();
+        vkCmdFillBuffer(cmd, e->particle_buf, 0, VK_WHOLE_SIZE, 0);
+        end_single_time(cmd);
+    }
+
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; f++) {
+        /* Matrix output: device-local, STORAGE + VERTEX_BUFFER. */
+        if (!create_buffer(ms,
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                           &e->matrix_buf[f], &e->matrix_mem[f])) goto fail;
+
+        /* Indirect args: host-visible so instance_count can be reset via mapped ptr. */
+        if (!create_buffer(is,
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           &e->indirect_buf[f], &e->indirect_mem[f])) goto fail;
+        vkMapMemory(g.device, e->indirect_mem[f], 0, VK_WHOLE_SIZE, 0, &e->indirect_mapped[f]);
+        VkDrawIndexedIndirectCommand *ic = e->indirect_mapped[f];
+        ic->indexCount    = g.meshes[mesh].index_count;
+        ic->instanceCount = 0;
+        ic->firstIndex    = 0;
+        ic->vertexOffset  = 0;
+        ic->firstInstance = 0;
+
+        /* Emit staging: host-visible, STORAGE_BUFFER. */
+        if (!create_buffer(es,
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           &e->emit_buf[f], &e->emit_mem[f])) goto fail;
+        vkMapMemory(g.device, e->emit_mem[f], 0, VK_WHOLE_SIZE, 0, &e->emit_mapped[f]);
+    }
+
+    /* Allocate per-frame compute descriptor sets. */
+    VkDescriptorSetLayout layouts[MAX_FRAMES_IN_FLIGHT];
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; f++) layouts[f] = g.particle_set_layout;
+    VkDescriptorSetAllocateInfo dsai = {0};
+    dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsai.descriptorPool     = g.particle_pool;
+    dsai.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    dsai.pSetLayouts        = layouts;
+    if (vkAllocateDescriptorSets(g.device, &dsai, e->compute_sets) != VK_SUCCESS) goto fail;
+
+    for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; f++) {
+        VkDescriptorBufferInfo bufs[4] = {
+            {e->particle_buf,  0, ps},
+            {e->matrix_buf[f], 0, ms},
+            {e->indirect_buf[f], 0, is},
+            {e->emit_buf[f],   0, es},
+        };
+        VkWriteDescriptorSet writes[4] = {0};
+        for (int b = 0; b < 4; b++) {
+            writes[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[b].dstSet          = e->compute_sets[f];
+            writes[b].dstBinding      = (uint32_t)b;
+            writes[b].descriptorCount = 1;
+            writes[b].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[b].pBufferInfo     = &bufs[b];
+        }
+        vkUpdateDescriptorSets(g.device, 4, writes, 0, NULL);
+    }
+    return idx;
+
+fail:
+    destroy_gpu_emitter_resources(e);
+    g.gpu_emitter_count--;
+    return RENDER_GPU_EMITTER_INVALID;
+}
+
+void render_destroy_gpu_emitter(gpu_emitter_handle_t h) {
+    if (h >= g.gpu_emitter_count || !g.gpu_emitters[h].active) return;
+    vkDeviceWaitIdle(g.device);
+    destroy_gpu_emitter_resources(&g.gpu_emitters[h]);
+}
+
+void render_gpu_emitter_emit(gpu_emitter_handle_t h,
+                             vec3_t pos, vec3_t vel,
+                             float life, float scale) {
+    if (h >= g.gpu_emitter_count || !g.gpu_emitters[h].active) return;
+    gpu_emitter_t *e = &g.gpu_emitters[h];
+    if (e->emit_pending_count >= MAX_EMIT_PER_FRAME) return;
+    gpu_particle_t *p = &e->emit_pending[e->emit_pending_count++];
+    p->pos[0] = pos.x; p->pos[1] = pos.y; p->pos[2] = pos.z;
+    p->life     = life;
+    p->vel[0] = vel.x; p->vel[1] = vel.y; p->vel[2] = vel.z;
+    p->max_life = life;
+    p->scale    = scale;
+    p->_pad[0]  = p->_pad[1] = p->_pad[2] = 0.0f;
+}
+
+void render_gpu_emitter_update(gpu_emitter_handle_t h, float dt) {
+    if (h >= g.gpu_emitter_count || !g.gpu_emitters[h].active) return;
+    if (g.particle_cmd_count >= MAX_GPU_EMITTERS) return;
+    gpu_emitter_t *e = &g.gpu_emitters[h];
+    e->pending_dt = dt;
+    e->pending    = true;
+    g.particle_cmds[g.particle_cmd_count++] = (gpu_particle_cmd_t){h};
+}
+
+/* --------------------------------------------------------------------------- */
+
 static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
                                   uint32_t instance_count,
                                   uint32_t inst_batch_count,
                                   uint32_t inst_model_count,
-                                  uint32_t text_verts) {
+                                  uint32_t text_verts,
+                                  uint32_t particle_cmd_count) {
     VkCommandBufferBeginInfo begin = {0};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &begin);
@@ -2498,6 +2782,88 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     }
 
     /* ------------------------------------------------------------------ */
+    /* GPU particle compute: inject + simulate (outside render pass).      */
+    /* ------------------------------------------------------------------ */
+
+    for (uint32_t pi = 0; pi < particle_cmd_count; pi++) {
+        gpu_emitter_t *e = &g.gpu_emitters[g.particle_cmds[pi].emitter_idx];
+
+        /* Serialize against previous frame's compute on the shared particle_buf. */
+        VkBufferMemoryBarrier pbar = {0};
+        pbar.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        pbar.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+        pbar.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        pbar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        pbar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        pbar.buffer              = e->particle_buf;
+        pbar.size                = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 0, NULL, 1, &pbar, 0, NULL);
+
+        /* Make host write of instance_count=0 visible to the compute shader. */
+        VkBufferMemoryBarrier hbar = {0};
+        hbar.sType               = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        hbar.srcAccessMask       = VK_ACCESS_HOST_WRITE_BIT;
+        hbar.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        hbar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        hbar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        hbar.buffer              = e->indirect_buf[g.frame];
+        hbar.size                = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 0, NULL, 1, &hbar, 0, NULL);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.particle_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            g.particle_layout, 0, 1, &e->compute_sets[g.frame], 0, NULL);
+
+        particle_push_t push = {0};
+        push.gravity_y = e->gravity_y;
+        push.capacity  = e->capacity;
+
+        /* Inject pass: write staged CPU-emitted particles into the ring buffer. */
+        uint32_t ec = e->emit_count[g.frame];
+        if (ec > 0) {
+            push.mode       = 0;
+            push.emit_count = ec;
+            push.ring_head  = e->emit_ring_head[g.frame];
+            push.dt         = 0.0f;
+            vkCmdPushConstants(cmd, g.particle_layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(push), &push);
+            vkCmdDispatch(cmd, (ec + 63) / 64, 1, 1);
+
+            /* Barrier: inject writes to particle_buf → simulate reads it. */
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, NULL, 1, &pbar, 0, NULL);
+        }
+
+        /* Simulate pass: advance physics, output alive matrices + indirect count. */
+        push.mode       = 1;
+        push.dt         = e->pending_dt;
+        push.emit_count = 0;
+        push.ring_head  = 0;
+        vkCmdPushConstants(cmd, g.particle_layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                           0, sizeof(push), &push);
+        vkCmdDispatch(cmd, (e->capacity + 63) / 64, 1, 1);
+    }
+
+    /* After all compute: make matrix/indirect writes visible to draw indirect + vertex. */
+    if (particle_cmd_count > 0) {
+        VkMemoryBarrier mbar = {0};
+        mbar.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mbar.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mbar.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
+                             VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+            0, 1, &mbar, 0, NULL, 0, NULL);
+    }
+
+    /* ------------------------------------------------------------------ */
     /* HDR scene pass  →  g.color_image                                    */
     /* ------------------------------------------------------------------ */
 
@@ -2617,6 +2983,32 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
             vkCmdBindVertexBuffers(cmd, 0, 2, vbufs, offs);
             vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(cmd, mesh->index_count, batch->count, 0, 0, 0);
+        }
+    }
+
+    /* GPU particle indirect draws (reuse instanced pipeline). */
+    if (particle_cmd_count > 0) {
+        VkPipeline ip = (g.wireframe && g.inst_wireframe_pipeline)
+                        ? g.inst_wireframe_pipeline : g.inst_pipeline;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ip);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                g.inst_layout, 1, 1,
+                                &g.scene_sets[g.frame], 0, NULL);
+        mat4_t vp = mat4_mul(g.proj, g.view);
+        vkCmdPushConstants(cmd, g.inst_layout, VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(mat4_t), &vp);
+        for (uint32_t pi = 0; pi < particle_cmd_count; pi++) {
+            gpu_emitter_t *e = &g.gpu_emitters[g.particle_cmds[pi].emitter_idx];
+            const gpu_mesh_t *mesh = &g.meshes[e->mesh];
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    g.inst_layout, 0, 1,
+                                    &g.materials[e->material].set, 0, NULL);
+            VkBuffer     vbufs[2] = {mesh->vertex_buffer, e->matrix_buf[g.frame]};
+            VkDeviceSize offs[2]  = {0, 0};
+            vkCmdBindVertexBuffers(cmd, 0, 2, vbufs, offs);
+            vkCmdBindIndexBuffer(cmd, mesh->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexedIndirect(cmd, e->indirect_buf[g.frame], 0, 1,
+                                     sizeof(VkDrawIndexedIndirectCommand));
         }
     }
 
@@ -2818,6 +3210,7 @@ bool render_init(window_t *window) {
         !create_skybox_infra() ||
         !create_shadow_pipeline() ||
         !create_pipeline() || !create_inst_pipelines() ||
+        !create_particle_pipeline() ||
         !create_text_pipeline() || !create_commands_and_sync()) {
         return false;
     }
@@ -3328,6 +3721,8 @@ void render_draw(void) {
     g.inst_model_count = 0;
     uint32_t text_verts = g.text_vert_count;
     g.text_vert_count = 0;
+    uint32_t particle_cmd_count = g.particle_cmd_count;
+    g.particle_cmd_count = 0;
 
     if (g.extent.width == 0 || g.extent.height == 0) {
         recreate_swapchain();
@@ -3402,11 +3797,27 @@ void render_draw(void) {
 
     vkWaitForFences(g.device, 1, &g.in_flight[g.frame], VK_TRUE, UINT64_MAX);
 
-    /* Safe to write this frame's text buffer now the fence guarantees the GPU
-       has finished its previous use. */
+    /* Fence guarantees frame N-2's GPU work is done.  Safe to write per-frame
+       CPU-side buffers (text, particle emit staging, indirect reset). */
     if (text_verts > 0) {
         memcpy(g.text_mapped[g.frame], g.text_verts,
                sizeof(text_vertex_t) * text_verts);
+    }
+
+    for (uint32_t pi = 0; pi < particle_cmd_count; pi++) {
+        gpu_emitter_t *e = &g.gpu_emitters[g.particle_cmds[pi].emitter_idx];
+        uint32_t n = e->emit_pending_count;
+        if (n > MAX_EMIT_PER_FRAME) n = MAX_EMIT_PER_FRAME;
+        e->emit_ring_head[g.frame] = e->ring_head;
+        if (n > 0) {
+            memcpy(e->emit_mapped[g.frame], e->emit_pending,
+                   sizeof(gpu_particle_t) * n);
+            e->ring_head = (e->ring_head + n) % e->capacity;
+            e->emit_pending_count = 0;
+        }
+        e->emit_count[g.frame] = n;
+        /* Reset instance_count to 0 so the simulate pass starts fresh. */
+        ((VkDrawIndexedIndirectCommand *)e->indirect_mapped[g.frame])->instanceCount = 0;
     }
 
     uint32_t image_index;
@@ -3427,7 +3838,8 @@ void render_draw(void) {
     VkCommandBuffer cmd = g.command_buffers[g.frame];
     vkResetCommandBuffer(cmd, 0);
     record_command_buffer(cmd, image_index, instance_count,
-                          inst_batch_count, inst_model_count, text_verts);
+                          inst_batch_count, inst_model_count, text_verts,
+                          particle_cmd_count);
 
     VkPipelineStageFlags wait_stage =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -3557,6 +3969,15 @@ void render_shutdown(void) {
     vkDestroyPipeline(g.device, g.inst_pipeline, NULL);
     vkDestroyPipeline(g.device, g.shadow_inst_pipeline, NULL);
     vkDestroyPipelineLayout(g.device, g.inst_layout, NULL);
+
+    /* GPU particle emitters. */
+    for (uint32_t i = 0; i < g.gpu_emitter_count; i++)
+        if (g.gpu_emitters[i].active)
+            destroy_gpu_emitter_resources(&g.gpu_emitters[i]);
+    if (g.particle_pipeline) vkDestroyPipeline(g.device, g.particle_pipeline, NULL);
+    if (g.particle_layout)   vkDestroyPipelineLayout(g.device, g.particle_layout, NULL);
+    if (g.particle_pool)     vkDestroyDescriptorPool(g.device, g.particle_pool, NULL);
+    if (g.particle_set_layout) vkDestroyDescriptorSetLayout(g.device, g.particle_set_layout, NULL);
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         vkDestroySemaphore(g.device, g.image_available[i], NULL);

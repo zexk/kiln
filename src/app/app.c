@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* Where models/textures live, resolved at runtime (env override, else the
    installed share/kiln/assets, else the build-time source dir). */
@@ -213,6 +214,24 @@ bool app_init(app_t *app) {
     app->ambient_intensity = 1.0f;
 
     build_scene(app); /* may set an initial selection */
+
+    /* GPU particle emitter: small cubes falling under gravity. */
+    app->particle_emitter = RENDER_GPU_EMITTER_INVALID;
+    {
+        cpu_mesh_t cube = {0};
+        if (cpu_mesh_cube(&cube)) {
+            mesh_handle_t m = render_upload_mesh(&cube);
+            cpu_mesh_free(&cube);
+            if (m != RENDER_MESH_INVALID) {
+                material_handle_t mat = render_create_material(
+                    (vec4_t){1.0f, 0.6f, 0.1f, 1.0f}, RENDER_TEXTURE_INVALID);
+                if (mat != RENDER_MATERIAL_INVALID) {
+                    app->particle_emitter = render_create_gpu_emitter(
+                        m, mat, 4096, (vec3_t){0.0f, -9.8f, 0.0f});
+                }
+            }
+        }
+    }
 
     camera_init(&app->camera);
     app->camera.distance = 16.0f;
@@ -831,6 +850,25 @@ void app_run(app_t *app) {
         if (!app->fly_mode)
             update_gizmo(app);
         build_ui(app);
+
+        /* GPU particles: spray a burst of cubes from above the scene origin. */
+        if (app->particle_emitter != RENDER_GPU_EMITTER_INVALID && dt > 0.0f) {
+            static unsigned rng = 1;
+            for (int k = 0; k < 4; k++) {
+                rng = rng * 1664525u + 1013904223u;
+                float rx = ((float)(rng & 0xFFFF) / 65535.0f) * 2.0f - 1.0f;
+                rng = rng * 1664525u + 1013904223u;
+                float rz = ((float)(rng & 0xFFFF) / 65535.0f) * 2.0f - 1.0f;
+                rng = rng * 1664525u + 1013904223u;
+                float vy = ((float)(rng & 0xFFFF) / 65535.0f) * 3.0f + 2.0f;
+                render_gpu_emitter_emit(app->particle_emitter,
+                    (vec3_t){rx * 3.0f, 6.0f, rz * 3.0f},
+                    (vec3_t){rx * 0.5f, vy,   rz * 0.5f},
+                    2.5f, 0.15f);
+            }
+            render_gpu_emitter_update(app->particle_emitter, dt);
+        }
+
         render_draw();
 
         if (app->fps_limit > 0.0f) {
@@ -850,6 +888,8 @@ void app_shutdown(app_t *app) {
         free(app->prototypes[i].pick_pos);
         free(app->prototypes[i].pick_idx);
     }
+    if (app->particle_emitter != RENDER_GPU_EMITTER_INVALID)
+        render_destroy_gpu_emitter(app->particle_emitter);
     render_shutdown();
     window_destroy(app->window);
     world_destroy(app->world);

@@ -107,6 +107,8 @@ typedef struct {
 #define APP_FRAME_SAMPLES 128
     float frame_ms[APP_FRAME_SAMPLES];
     int   frame_ms_head;
+
+    gpu_emitter_handle_t particle_emitter;
 } app_t;
 
 bool app_init(app_t *app);

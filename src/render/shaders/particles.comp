@@ -1,0 +1,88 @@
+#version 450
+
+/* Particle state - std430 layout, 48 bytes per particle.
+   Must match gpu_particle_t in render_vk.c exactly. */
+struct Particle {
+    vec3  pos;
+    float life;
+    vec3  vel;
+    float max_life;
+    float scale;
+    float p0, p1, p2; /* explicit padding to 48 bytes */
+};
+
+layout(std430, set = 0, binding = 0) buffer ParticleBuf {
+    Particle particles[];
+} pb;
+
+/* Per-frame: instance matrix output (also bound as vertex buffer for indirect draw). */
+layout(std430, set = 0, binding = 1) buffer MatrixBuf {
+    mat4 matrices[];
+} mb;
+
+/* Per-frame: VkDrawIndexedIndirectCommand (20 bytes).
+   instance_count is atomically incremented by the simulate pass. */
+layout(std430, set = 0, binding = 2) buffer IndirectBuf {
+    uint index_count;
+    uint instance_count;
+    uint first_index;
+    uint vertex_offset;
+    uint first_instance;
+} ib;
+
+/* Per-frame: CPU-staged new particles to inject (host-visible). */
+layout(std430, set = 0, binding = 3) readonly buffer EmitBuf {
+    Particle particles[];
+} eb;
+
+layout(push_constant) uniform PC {
+    float    dt;
+    float    gravity_y;
+    uint     capacity;
+    uint     emit_count;
+    uint     ring_head;
+    uint     mode;    /* 0 = inject, 1 = simulate */
+    uint     _pad0;
+    uint     _pad1;
+} pc;
+
+layout(local_size_x = 64) in;
+
+void main() {
+    uint id = gl_GlobalInvocationID.x;
+
+    if (pc.mode == 0u) {
+        /* INJECT: write staged particles into the ring buffer. */
+        if (id >= pc.emit_count) return;
+        uint slot = (pc.ring_head + id) % pc.capacity;
+        pb.particles[slot] = eb.particles[id];
+    } else {
+        /* SIMULATE: advance physics, output alive particles to matrix buffer. */
+        if (id >= pc.capacity) return;
+
+        Particle p = pb.particles[id];
+        if (p.life <= 0.0) return;
+
+        p.life -= pc.dt;
+        if (p.life <= 0.0) {
+            pb.particles[id] = p;
+            return;
+        }
+
+        p.vel.y += pc.gravity_y * pc.dt;
+        p.pos   += p.vel * pc.dt;
+        pb.particles[id] = p;
+
+        /* Claim a slot in the output matrix buffer. */
+        uint slot = atomicAdd(ib.instance_count, 1u);
+        if (slot < pc.capacity) {
+            float s = p.scale;
+            mb.matrices[slot] = mat4(
+                vec4(s,   0.0, 0.0, 0.0),
+                vec4(0.0, s,   0.0, 0.0),
+                vec4(0.0, 0.0, s,   0.0),
+                vec4(p.pos,    1.0)
+            );
+        }
+    }
+}

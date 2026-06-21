@@ -129,3 +129,30 @@ void render_set_bloom(bool enabled, float threshold, float strength, float expos
 /* Write the next frame's HDR color buffer to a PPM file at `path`.
    Blocks only on that one frame; safe to call between render_draw calls. */
 void render_save_screenshot(const char *path);
+
+/* GPU particle emitter: particle state lives in device-local SSBOs; a compute
+   shader advances physics and writes indirect draw arguments each frame.
+   The draw reuses the existing instanced pipeline so lighting and shadows apply.
+
+   Usage:
+     handle = render_create_gpu_emitter(mesh, mat, 4096, (vec3_t){0,-9.8f,0});
+     // each frame:
+     render_gpu_emitter_emit(handle, pos, vel, life, scale);  // 0-N times
+     render_gpu_emitter_update(handle, dt);                   // once per frame
+*/
+typedef uint32_t gpu_emitter_handle_t;
+#define RENDER_GPU_EMITTER_INVALID UINT32_MAX
+
+gpu_emitter_handle_t render_create_gpu_emitter(mesh_handle_t mesh,
+                                               material_handle_t mat,
+                                               uint32_t capacity,
+                                               vec3_t gravity);
+void render_destroy_gpu_emitter(gpu_emitter_handle_t h);
+
+void render_gpu_emitter_emit(gpu_emitter_handle_t h,
+                             vec3_t pos, vec3_t vel,
+                             float life, float scale);
+
+/* Advance the simulation by dt seconds and queue the emitter for this frame's
+   draw.  Call once per frame between render_set_camera and render_draw. */
+void render_gpu_emitter_update(gpu_emitter_handle_t h, float dt);

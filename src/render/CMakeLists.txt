@@ -13,7 +13,8 @@ if(KILN_RENDERER STREQUAL "vulkan")
     foreach(shader mesh.vert mesh.frag mesh_inst.vert shadow.vert shadow_inst.vert
                     fullscreen.vert bloom_threshold.frag bloom_blur.frag bloom_composite.frag
                     skybox.vert skybox.frag
-                    text.vert text.frag)
+                    text.vert text.frag
+                    particles.comp)
         add_custom_command(
             OUTPUT  ${shader_out_dir}/${shader}.spv
             COMMAND ${GLSLC} ${shader_src_dir}/${shader}

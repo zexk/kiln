@@ -79,3 +79,10 @@ void render_set_light(vec3_t dir, vec3_t color, vec3_t ambient);
 void render_draw(void);
 
 void render_shutdown(void);
+
+/* Toggle vsync. When enabled, selects FIFO (waits for every vblank).
+   When disabled, prefers MAILBOX (no tearing, low latency) and falls
+   back to IMMEDIATE if MAILBOX is unsupported. Takes effect on the
+   next rendered frame; safe to call between render_draw calls. */
+void render_set_vsync(bool enabled);
+bool render_get_vsync(void);

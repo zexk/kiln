@@ -171,6 +171,9 @@ static struct {
 
     float clear_color[3];
     char shader_dir[1024]; /* resolved at init; .spv files live here */
+
+    VkPresentModeKHR present_mode; /* desired mode; applied on next swapchain create */
+    bool vsync_dirty;              /* triggers swapchain recreation in render_draw */
 } g;
 
 /* ----------------------------------------------------------------------- */
@@ -550,6 +553,28 @@ static VkExtent2D choose_extent(const VkSurfaceCapabilitiesKHR *caps) {
     return e;
 }
 
+static VkPresentModeKHR choose_present_mode(bool vsync) {
+    uint32_t count = 0;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(g.physical_device, g.surface,
+                                             &count, NULL);
+    VkPresentModeKHR *modes = malloc(sizeof(*modes) * count);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(g.physical_device, g.surface,
+                                             &count, modes);
+    VkPresentModeKHR result = VK_PRESENT_MODE_FIFO_KHR;
+    if (!vsync) {
+        for (uint32_t i = 0; i < count; i++) {
+            if (modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
+                result = VK_PRESENT_MODE_MAILBOX_KHR;
+                break;
+            }
+            if (modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR)
+                result = VK_PRESENT_MODE_IMMEDIATE_KHR;
+        }
+    }
+    free(modes);
+    return result;
+}
+
 static bool create_swapchain(void) {
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g.physical_device, g.surface,
@@ -592,7 +617,7 @@ static bool create_swapchain(void) {
     info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     info.preTransform = caps.currentTransform;
     info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    info.presentMode = VK_PRESENT_MODE_FIFO_KHR; /* vsync, always supported */
+    info.presentMode = g.present_mode;
     info.clipped = VK_TRUE;
 
     uint32_t indices[] = {g.graphics_family, g.present_family};
@@ -1448,9 +1473,10 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
 
 bool render_init(window_t *window) {
     memset(&g, 0, sizeof(g));
-    g.window = window;
-    g.view = mat4_identity();
-    g.proj = mat4_identity();
+    g.window       = window;
+    g.view         = mat4_identity();
+    g.proj         = mat4_identity();
+    g.present_mode = VK_PRESENT_MODE_FIFO_KHR;
     g.clear_color[0] = 0.02f;
     g.clear_color[1] = 0.02f;
     g.clear_color[2] = 0.05f;
@@ -1687,6 +1713,11 @@ void render_draw(void) {
         recreate_swapchain();
         return;
     }
+    if (g.vsync_dirty) {
+        g.vsync_dirty = false;
+        recreate_swapchain();
+        return;
+    }
 
     vkWaitForFences(g.device, 1, &g.in_flight[g.frame], VK_TRUE, UINT64_MAX);
 
@@ -1744,6 +1775,18 @@ void render_draw(void) {
     }
 
     g.frame = (g.frame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+void render_set_vsync(bool enabled) {
+    VkPresentModeKHR mode = choose_present_mode(enabled);
+    if (mode == g.present_mode) return;
+    g.present_mode = mode;
+    g.vsync_dirty  = true;
+}
+
+bool render_get_vsync(void) {
+    return g.present_mode == VK_PRESENT_MODE_FIFO_KHR ||
+           g.present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR;
 }
 
 void render_shutdown(void) {

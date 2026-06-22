@@ -122,7 +122,6 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE:
         w->width  = (uint32_t)LOWORD(lp);
         w->height = (uint32_t)HIWORD(lp);
-        fprintf(stderr, "[kiln] WM_SIZE %ux%u\n", w->width, w->height);
         if (w->width > 0 && w->height > 0) {
             ev.type          = EVENT_RESIZE;
             ev.resize.width  = w->width;
@@ -271,7 +270,7 @@ window_t *window_create(const char *title, uint32_t width, uint32_t height) {
 
     if (!w->hwnd) { free(w); return NULL; }
 
-    ShowWindow(w->hwnd, SW_SHOW);
+    ShowWindow(w->hwnd, SW_SHOWMAXIMIZED);
     UpdateWindow(w->hwnd);
     return w;
 }

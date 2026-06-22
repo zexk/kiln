@@ -13,8 +13,6 @@ bool create_swapchain(void) {
     /* Keep g_vk.width/height in sync with the actual extent created. */
     g_vk.width  = (int)g_vk.swap_extent.width;
     g_vk.height = (int)g_vk.swap_extent.height;
-    fprintf(stderr, "[kiln] create_swapchain extent %ux%u\n",
-            g_vk.swap_extent.width, g_vk.swap_extent.height);
 
     uint32_t fmt_count = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(g_vk.physical_device, g_vk.surface, &fmt_count, NULL);

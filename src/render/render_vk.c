@@ -842,9 +842,6 @@ static bool create_swapchain(void) {
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g.physical_device, g.surface,
                                               &caps);
     g.extent = choose_extent(&caps);
-    fprintf(stderr, "[kiln] create_swapchain extent %ux%u (caps.currentExtent %ux%u)\n",
-            g.extent.width, g.extent.height,
-            caps.currentExtent.width, caps.currentExtent.height);
     if (g.extent.width == 0 || g.extent.height == 0) {
         return true; /* minimized; defer */
     }
@@ -3375,7 +3372,6 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
 /* ----------------------------------------------------------------------- */
 
 bool render_init(window_t *window) {
-    fprintf(stderr, "[kiln] render_init BUILD " __DATE__ " " __TIME__ "\n");
     memset(&g, 0, sizeof(g));
     g.window       = window;
     g.view         = mat4_identity();

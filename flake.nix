@@ -7,17 +7,60 @@
   };
 
   outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+    # ── System-agnostic outputs ──────────────────────────────────────────────
+    {
+      # Helper for downstream games that use kiln as a flake input.
+      # Usage:
+      #   packages.default = inputs.kiln.lib.mkKilnGame {
+      #     inherit pkgs;
+      #     pname = "mygame";
+      #     src = ./.;
+      #   };
+      lib.mkKilnGame =
+        { pkgs
+        , pname
+        , version ? "0.1.0"
+        , src
+        , cmakeTarget ? pname
+        , extraCmakeFlags ? []
+        , extraBuildInputs ? []
+        , installPhase ? ''
+            mkdir -p $out/bin $out/share/${pname}/shaders
+            cp ${cmakeTarget} $out/bin/
+            cp shaders/*.spv $out/share/${pname}/shaders/
+            [ -d assets ] && cp -r assets $out/share/${pname}/ || true
+          ''
+        , meta ? {}
+        }:
+        pkgs.stdenv.mkDerivation {
+          inherit pname version src meta installPhase;
+          nativeBuildInputs = with pkgs; [ gcc cmake ninja pkg-config shaderc ];
+          buildInputs = with pkgs; [
+            libX11
+            vulkan-loader
+            vulkan-headers
+            shaderc
+            stb
+          ] ++ extraBuildInputs;
+          cmakeFlags = [
+            "-DKILN_DIR=${self.outPath}"
+            "-DBUILD_TESTING=OFF"
+          ] ++ extraCmakeFlags;
+          buildPhase = "cmake --build . --target ${cmakeTarget}";
+        };
+    }
+
+    # ── Per-system outputs ───────────────────────────────────────────────────
+    // flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
         mingw = pkgs.pkgsCross.mingwW64;
 
-        # Host tools used by both Linux and Win32 builds.
         hostTools = with pkgs; [
           cmake
           ninja
           pkg-config
-          shaderc   # provides glslc; shader compilation always runs on host
+          shaderc
         ];
 
         linuxBuildInputs = with pkgs; [
@@ -62,40 +105,23 @@
           '';
         };
 
-        # ── Win32 cross-compiled package (host: Linux, target: x86_64-windows)
-        #    Requires pkgs.pkgsCross.mingwW64 to be available.
-        #    The Vulkan loader (vulkan-1.dll) is linked at build time via the
-        #    mingw import lib; at runtime it must be present on the Windows
-        #    machine (installed with any Vulkan-capable GPU driver).
-        # ────────────────────────────────────────────────────────────────────
+        # ── Win32 cross-compiled package ─────────────────────────────────────
         packages.win32 = mingw.stdenv.mkDerivation {
           pname = "kiln-win32";
           version = "0.1.0";
           src = ./.;
-
-          # Build-host tools: cmake/ninja/glslc run on Linux during the build.
           nativeBuildInputs = hostTools ++ [ pkgs.gcc ];
-
-          # Target libraries: headers + import libs for the Windows binary.
           buildInputs = with mingw; [
             vulkan-headers
             vulkan-loader
             windows.pthreads
-            windows.mcfgthreads   # provides libmcfgthread.a for static linking
+            windows.mcfgthreads
             stb
           ];
-
-          cmakeFlags = [
-            "-DBUILD_TESTING=OFF"   # criterion not available for mingw
-          ];
-
-          # nixpkgs mingw uses the MCF GCC thread model.  libmcfgthread-2.dll
-          # is not a system DLL — bundle it next to kiln.exe so the binary
-          # runs on a stock Windows machine without any extra installs.
+          cmakeFlags = [ "-DBUILD_TESTING=OFF" ];
           postInstall = ''
             cp ${mingw.windows.mcfgthreads}/bin/libmcfgthread-2.dll $out/bin/
           '';
-
           doCheck = false;
         };
 
@@ -114,6 +140,5 @@
             echo "Kiln dev shell"
           '';
         };
-      }
-    );
+      });
 }

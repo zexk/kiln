@@ -122,6 +122,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE:
         w->width  = (uint32_t)LOWORD(lp);
         w->height = (uint32_t)HIWORD(lp);
+        fprintf(stderr, "[kiln] WM_SIZE %ux%u\n", w->width, w->height);
         if (w->width > 0 && w->height > 0) {
             ev.type          = EVENT_RESIZE;
             ev.resize.width  = w->width;

@@ -806,16 +806,13 @@ static bool create_device(void) {
 /* ----------------------------------------------------------------------- */
 
 static VkExtent2D choose_extent(const VkSurfaceCapabilitiesKHR *caps) {
-    /* Always use the platform window size rather than caps.currentExtent:
-       on Wine, currentExtent is often stale after an external WM resize. */
+    /* Use platform window size directly. Do NOT clamp to caps min/maxImageExtent:
+       on Wine those equal currentExtent, which is stale after an external WM
+       resize, so clamping would silently lock the swapchain at the old size. */
+    (void)caps;
     uint32_t w, h;
     window_size(g.window, &w, &h);
-    VkExtent2D e = {w, h};
-    if (e.width  < caps->minImageExtent.width)  e.width  = caps->minImageExtent.width;
-    if (e.width  > caps->maxImageExtent.width)  e.width  = caps->maxImageExtent.width;
-    if (e.height < caps->minImageExtent.height) e.height = caps->minImageExtent.height;
-    if (e.height > caps->maxImageExtent.height) e.height = caps->maxImageExtent.height;
-    return e;
+    return (VkExtent2D){w, h};
 }
 
 static VkPresentModeKHR choose_present_mode(bool vsync) {
@@ -845,6 +842,9 @@ static bool create_swapchain(void) {
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g.physical_device, g.surface,
                                               &caps);
     g.extent = choose_extent(&caps);
+    fprintf(stderr, "[kiln] create_swapchain extent %ux%u (caps.currentExtent %ux%u)\n",
+            g.extent.width, g.extent.height,
+            caps.currentExtent.width, caps.currentExtent.height);
     if (g.extent.width == 0 || g.extent.height == 0) {
         return true; /* minimized; defer */
     }
@@ -3375,6 +3375,7 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
 /* ----------------------------------------------------------------------- */
 
 bool render_init(window_t *window) {
+    fprintf(stderr, "[kiln] render_init BUILD " __DATE__ " " __TIME__ "\n");
     memset(&g, 0, sizeof(g));
     g.window       = window;
     g.view         = mat4_identity();

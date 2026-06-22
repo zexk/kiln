@@ -59,6 +59,9 @@ static keycode_t keysym_to_code(KeySym ks) {
     case XK_7: return KEY_7;
     case XK_8: return KEY_8;
     case XK_9: return KEY_9;
+    case XK_z: case XK_Z: return KEY_Z;
+    case XK_y: case XK_Y: return KEY_Y;
+    case XK_f: case XK_F: return KEY_F;
     default:   return KEY_UNKNOWN;
     }
 }
@@ -145,6 +148,7 @@ bool window_poll_event(window_t *w, event_t *out) {
         out->key.code   = keysym_to_code(ks);
         out->key.keysym = ks;
         out->key.down   = true;
+        out->key.ctrl   = (ev.xkey.state & ControlMask) != 0;
 
         /* queue a TEXT event for printable characters */
         char buf[8];
@@ -162,6 +166,7 @@ bool window_poll_event(window_t *w, event_t *out) {
         out->key.code   = keysym_to_code(ks);
         out->key.keysym = ks;
         out->key.down   = false;
+        out->key.ctrl   = (ev.xkey.state & ControlMask) != 0;
         break;
     }
     case MotionNotify: {

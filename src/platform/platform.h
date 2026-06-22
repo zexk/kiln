@@ -18,6 +18,7 @@ typedef enum {
     KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN,
     KEY_0, KEY_1, KEY_2, KEY_3, KEY_4,
     KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
+    KEY_Z, KEY_Y, KEY_F,
     KEY_COUNT,
 } keycode_t;
 
@@ -52,6 +53,7 @@ typedef struct {
             keycode_t      code;
             unsigned long  keysym; /* raw platform keysym for input.c key lookup */
             bool           down;
+            bool           ctrl;   /* Ctrl modifier held at event time */
         } key;
         struct {
             mouse_button_t button;

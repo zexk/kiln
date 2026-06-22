@@ -60,6 +60,16 @@ bash assets/models/fetch.sh
 
 Downloads CC0 OBJ meshes from [alecjacobson/common-3d-test-models](https://github.com/alecjacobson/common-3d-test-models) and bakes to .kmesh.
 
+## Demos
+
+**Buffon's Needle** — 3D physics simulation that estimates π by dropping needles onto a ruled plane. Fly around with WASD/mouse; `+`/`-` to scale simulation speed; `Space` to pause; `R` to reset.
+
+```sh
+./build/demos/buffon/buffon        # Linux
+nix build .#buffon                 # Linux (Nix)
+nix build .#buffon-win32           # Windows cross-compile
+```
+
 ## As a library
 
 Games can pull kiln in as a Nix flake input and use `lib.mkKilnGame`:

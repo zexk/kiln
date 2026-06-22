@@ -105,6 +105,31 @@
           '';
         };
 
+        # ── Win32 cross-compiled demos ───────────────────────────────────────
+        packages.buffon-win32 = mingw.stdenv.mkDerivation {
+          pname = "kiln-demo-buffon-win32";
+          version = "0.1.0";
+          meta.mainProgram = "buffon";
+          src = ./.;
+          nativeBuildInputs = hostTools ++ [ pkgs.gcc ];
+          buildInputs = with mingw; [
+            vulkan-headers
+            vulkan-loader
+            windows.pthreads
+            windows.mcfgthreads
+            stb
+          ];
+          cmakeFlags = [ "-DBUILD_TESTING=OFF" ];
+          buildPhase = "cmake --build . --target buffon";
+          installPhase = ''
+            mkdir -p $out/bin $out/share/kiln/shaders
+            cp demos/buffon/buffon.exe $out/bin/
+            cp src/render/shaders/*.spv $out/share/kiln/shaders/
+            cp ${mingw.windows.mcfgthreads}/bin/libmcfgthread-2.dll $out/bin/
+          '';
+          doCheck = false;
+        };
+
         # ── Win32 cross-compiled package ─────────────────────────────────────
         packages.win32 = mingw.stdenv.mkDerivation {
           pname = "kiln-win32";

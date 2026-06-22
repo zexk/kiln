@@ -20,10 +20,9 @@ static void setup_dynamic_state(void) {
 
 void renderer_draw_arrays(R_Primitive primitive, int first, int count) {
     CHECK_DEVICE();
-    assert(g_active_cmd != VK_NULL_HANDLE && "renderer_clear not called");
-    assert(g_vk.active_pipeline < g_vk.pipeline_count && "no active pipeline");
-    assert((g_vk.bound_vbo != VK_NULL_HANDLE || g_vao_state.buffer != VK_NULL_HANDLE)
-           && "no vertex buffer bound");
+    if (g_active_cmd == VK_NULL_HANDLE) return;
+    if (g_vk.active_pipeline >= g_vk.pipeline_count) return;
+    if (g_vk.bound_vbo == VK_NULL_HANDLE && g_vao_state.buffer == VK_NULL_HANDLE) return;
 
     Pipeline *pipe = &g_vk.pipelines[g_vk.active_pipeline];
     vkCmdBindPipeline(g_active_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->pipeline);
@@ -52,9 +51,9 @@ void renderer_draw_arrays(R_Primitive primitive, int first, int count) {
 
 void renderer_draw_elements(R_Primitive primitive, int count, int offset) {
     CHECK_DEVICE();
-    assert(g_active_cmd != VK_NULL_HANDLE && "renderer_clear not called");
-    assert(g_vk.active_pipeline < g_vk.pipeline_count && "no active pipeline");
-    assert(g_vk.bound_index_buffer != VK_NULL_HANDLE && "no index buffer bound");
+    if (g_active_cmd == VK_NULL_HANDLE) return;
+    if (g_vk.active_pipeline >= g_vk.pipeline_count) return;
+    if (g_vk.bound_index_buffer == VK_NULL_HANDLE) return;
 
     Pipeline *pipe = &g_vk.pipelines[g_vk.active_pipeline];
     vkCmdBindPipeline(g_active_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->pipeline);

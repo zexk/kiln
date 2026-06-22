@@ -118,7 +118,7 @@ void get_pipeline_config(const char *vert_path, const char *frag_path, PipelineC
         cfg->push_constant_size = 8;
     } else if (strstr(vert_path, "hud")) {
         cfg->vformat            = VERTEX_FORMAT_HUD;
-        cfg->topology           = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        cfg->topology           = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         cfg->depth_test_enable  = VK_FALSE;
         cfg->depth_write_enable = VK_FALSE;
         cfg->cull_mode          = VK_CULL_MODE_NONE;
@@ -365,31 +365,47 @@ int renderer_uniform_location(R_Program program, const char *name) {
     return g_uniform_count++;
 }
 
+/* Resolve a uniform name to its push-constant byte offset.
+   Model/view/projection and the per-shader custom slots all have fixed
+   layout(offset=N) declarations in the SPIR-V; we must match them exactly.
+   Samplers (uTexture) are descriptor bindings, not push constants — skip. */
+static int uniform_offset(int loc) {
+    const char *n = g_uniforms[loc].name;
+    /* MVP block — same layout across every pipeline. */
+    if (!strcmp(n, "model"))                                            return 0;
+    if (!strcmp(n, "view") || !strcmp(n, "inv_view_rotation"))         return 64;
+    if (!strcmp(n, "projection") || !strcmp(n, "inv_projection"))      return 128;
+    /* Custom uniforms — all shaders place them at offset 192+. */
+    if (!strcmp(n, "uFogColor") || !strcmp(n, "uColor"))               return 192;
+    if (!strcmp(n, "uFogDensity"))                                      return 204;
+    if (!strcmp(n, "uAlpha"))                                           return 208;
+    /* Sampler / descriptor binding — not a push constant, skip. */
+    if (!strcmp(n, "uTexture"))                                         return -1;
+    /* Unknown: use the auto-assigned offset (may overflow — better than silent corruption). */
+    return g_uniforms[loc].offset;
+}
+
 void renderer_uniform_mat4(int loc, const float *m) {
     if (loc < 0 || loc >= g_uniform_count || !m) return;
-    int offset = g_uniforms[loc].offset;
-    const char *n = g_uniforms[loc].name;
-    if (!strcmp(n, "model"))                                              offset = 0;
-    else if (!strcmp(n, "view") || !strcmp(n, "inv_view_rotation"))      offset = 64;
-    else if (!strcmp(n, "projection") || !strcmp(n, "inv_projection"))   offset = 128;
-    if (offset + 64 > 256) return;
+    int offset = uniform_offset(loc);
+    if (offset < 0 || offset + 64 > 256) return;
     memcpy(g_push_constants + offset, m, 64);
     g_push_dirty = true;
 }
 
 void renderer_uniform_vec3(int loc, float x, float y, float z) {
     if (loc < 0 || loc >= g_uniform_count) return;
-    int offset = g_uniforms[loc].offset;
-    if (offset + 16 > 256) return;
-    float v[4] = {x, y, z, 0.f};
+    int offset = uniform_offset(loc);
+    if (offset < 0 || offset + 12 > 256) return;
+    float v[3] = {x, y, z};
     memcpy(g_push_constants + offset, v, 12);
     g_push_dirty = true;
 }
 
 void renderer_uniform_vec2(int loc, float x, float y) {
     if (loc < 0 || loc >= g_uniform_count) return;
-    int offset = g_uniforms[loc].offset;
-    if (offset + 8 > 256) return;
+    int offset = uniform_offset(loc);
+    if (offset < 0 || offset + 8 > 256) return;
     float v[2] = {x, y};
     memcpy(g_push_constants + offset, v, 8);
     g_push_dirty = true;
@@ -397,16 +413,16 @@ void renderer_uniform_vec2(int loc, float x, float y) {
 
 void renderer_uniform_float(int loc, float value) {
     if (loc < 0 || loc >= g_uniform_count) return;
-    int offset = g_uniforms[loc].offset;
-    if (offset + 4 > 256) return;
+    int offset = uniform_offset(loc);
+    if (offset < 0 || offset + 4 > 256) return;
     memcpy(g_push_constants + offset, &value, 4);
     g_push_dirty = true;
 }
 
 void renderer_uniform_int(int loc, int value) {
     if (loc < 0 || loc >= g_uniform_count) return;
-    int offset = g_uniforms[loc].offset;
-    if (offset + 4 > 256) return;
+    int offset = uniform_offset(loc);
+    if (offset < 0 || offset + 4 > 256) return;
     memcpy(g_push_constants + offset, &value, 4);
     g_push_dirty = true;
 }

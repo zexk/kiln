@@ -6,25 +6,25 @@ Kyub (the voxel game built on it) lives at [zexk/kyub](https://github.com/zexk/k
 
 ## Modules
 
-**render** -- Vulkan, dynamic rendering, no render pass objects. HDR offscreen target, bloom (threshold + gaussian + Reinhard), cascaded shadow maps (3 cascades, PCF 3x3), point lights (up to 8, Blinn-Phong), normal mapping, instanced draws, frustum culling, skybox, CPU particles, screenshot readback.
+**render**: Vulkan, dynamic rendering, no render pass objects. HDR offscreen target, bloom (threshold + gaussian + Reinhard), cascaded shadow maps (3 cascades, PCF 3x3), point lights (up to 8, Blinn-Phong), normal mapping, instanced draws, frustum culling, skybox, CPU particles, screenshot readback.
 
-**ecs** -- archetype-based world. `query_iter` / `query_next` / `query_get`.
+**ecs**: archetype-based world. `query_iter` / `query_next` / `query_get`.
 
-**platform** -- window, event loop. X11 and Win32 backends.
+**platform**: window, event loop. X11 and Win32 backends.
 
-**core** -- linalg, AABB, frustum, noise (Perlin + fBm), arena allocator, timer, logging, file I/O.
+**core**: linalg, AABB, frustum, noise (Perlin + fBm), arena allocator, timer, logging, file I/O.
 
-**camera** -- orbit and FPS.
+**camera**: orbit and FPS.
 
-**ui** -- immediate-mode: panels, sliders, buttons, text, graph strip.
+**ui**: immediate-mode panels, sliders, buttons, text, graph strip.
 
-**gizmo** -- screen-space translate/rotate/scale gizmo.
+**gizmo**: screen-space translate/rotate/scale gizmo.
 
-**assets** -- OBJ loader, kmesh binary format, STB image, scene serializer (.kscn).
+**assets**: OBJ loader, kmesh binary format, STB image, scene serializer (.kscn).
 
-**app** -- scene editor. Orbit/FPS camera, entity spawn from templates, ray-cast pick (AABB + Moller-Trumbore), transform gizmo, scene save/load, light controls, debug panel.
+**app**: scene editor. Orbit/FPS camera, entity spawn from templates, ray-cast pick (AABB + Moller-Trumbore), transform gizmo, scene save/load, light controls, debug panel.
 
-**physics** -- AABB voxel collision.
+**physics**: AABB voxel collision.
 
 ## Build
 
@@ -33,7 +33,7 @@ nix develop
 ninja -C build
 ```
 
-Or without Nix (Linux, X11, Vulkan SDK required):
+Without Nix (Linux, X11, Vulkan SDK required):
 
 ```sh
 cmake -B build -G Ninja
@@ -62,7 +62,7 @@ Downloads CC0 OBJ meshes from [alecjacobson/common-3d-test-models](https://githu
 
 ## Demos
 
-**Buffon's Needle** — 3D physics simulation that estimates π by dropping needles onto a ruled plane. Fly around with WASD/mouse; `+`/`-` to scale simulation speed; `Space` to pause; `R` to reset.
+**Buffon's Needle**: 3D physics simulation estimating pi by dropping needles onto a ruled plane. WASD/mouse to fly, `+`/`-` to scale speed, `Space` to pause, `R` to reset.
 
 ```sh
 ./build/demos/buffon/buffon        # Linux

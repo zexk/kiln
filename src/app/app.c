@@ -212,6 +212,7 @@ bool app_init(app_t *app) {
     app->light_pitch      = 58.0f;
     app->light_intensity  = 1.0f;
     app->ambient_intensity = 1.0f;
+    app->show_grid        = true;
 
     build_scene(app); /* may set an initial selection */
 
@@ -328,6 +329,230 @@ static void render_scene(app_t *app) {
     }
 }
 
+/* ---- Euler angle helpers (XYZ intrinsic, degrees displayed in inspector) ---- */
+
+static vec3_t quat_to_euler_deg(quat_t q) {
+    float sinr = 2.0f * (q.w * q.x + q.y * q.z);
+    float cosr = 1.0f - 2.0f * (q.x * q.x + q.y * q.y);
+    float rx = atan2f(sinr, cosr);
+
+    float sinp = 2.0f * (q.w * q.y - q.z * q.x);
+    float ry = fabsf(sinp) >= 1.0f ? copysignf(KLN_PI * 0.5f, sinp) : asinf(sinp);
+
+    float siny = 2.0f * (q.w * q.z + q.x * q.y);
+    float cosy = 1.0f - 2.0f * (q.y * q.y + q.z * q.z);
+    float rz = atan2f(siny, cosy);
+
+    return (vec3_t){kln_degrees(rx), kln_degrees(ry), kln_degrees(rz)};
+}
+
+static quat_t euler_deg_to_quat(vec3_t deg) {
+    float hx = kln_radians(deg.x) * 0.5f;
+    float hy = kln_radians(deg.y) * 0.5f;
+    float hz = kln_radians(deg.z) * 0.5f;
+    float cx = cosf(hx), sx = sinf(hx);
+    float cy = cosf(hy), sy = sinf(hy);
+    float cz = cosf(hz), sz = sinf(hz);
+    return quat_normalize((quat_t){
+        sx * cy * cz + cx * sy * sz,
+        cx * sy * cz - sx * cy * sz,
+        cx * cy * sz + sx * sy * cz,
+        cx * cy * cz - sx * sy * sz,
+    });
+}
+
+/* ---- viewport grid ---- */
+
+/* Draw a world-space line segment using the 2D overlay, clipping against the
+   camera near plane so segments that straddle or cross behind the eye are
+   handled correctly.  Clipping is done in homogeneous clip space: points with
+   w < EPS are behind the camera; we linearly interpolate to find the clip
+   boundary and project only the visible portion. */
+static void grid_line(mat4_t vp, vec3_t a, vec3_t b,
+                      float sw, float sh,
+                      float thick, float r, float g, float bl) {
+    vec4_t ca = mat4_mul_vec4(vp, (vec4_t){a.x, a.y, a.z, 1.0f});
+    vec4_t cb = mat4_mul_vec4(vp, (vec4_t){b.x, b.y, b.z, 1.0f});
+    const float EPS = 1e-4f;
+
+    if (ca.w < EPS && cb.w < EPS) return;
+
+    if (ca.w < EPS) {
+        float t = (EPS - ca.w) / (cb.w - ca.w);
+        ca = (vec4_t){ca.x + t * (cb.x - ca.x),
+                      ca.y + t * (cb.y - ca.y),
+                      ca.z + t * (cb.z - ca.z),
+                      EPS};
+    } else if (cb.w < EPS) {
+        float t = (EPS - cb.w) / (ca.w - cb.w);
+        cb = (vec4_t){cb.x + t * (ca.x - cb.x),
+                      cb.y + t * (ca.y - cb.y),
+                      cb.z + t * (ca.z - cb.z),
+                      EPS};
+    }
+
+    float ax = (ca.x / ca.w * 0.5f + 0.5f) * sw;
+    float ay = (1.0f - (ca.y / ca.w * 0.5f + 0.5f)) * sh;
+    float bx = (cb.x / cb.w * 0.5f + 0.5f) * sw;
+    float by = (1.0f - (cb.y / cb.w * 0.5f + 0.5f)) * sh;
+    render_line(ax, ay, bx, by, thick, r, g, bl);
+}
+
+static void draw_grid(app_t *app) {
+    uint32_t wu, hu;
+    window_size(app->window, &wu, &hu);
+    float sw = (float)wu;
+    float sh = (float)hu;
+    float aspect = hu > 0 ? sw / sh : 1.0f;
+
+    mat4_t view = app->fly_mode
+        ? fps_camera_view(&app->fly_cam, app->fly_pos)
+        : camera_view(&app->camera);
+    mat4_t vp = mat4_mul(camera_proj(&app->camera, aspect), view);
+
+#define GRID_EXTENT 20.0f
+#define GRID_STEPS  20
+
+    for (int i = -GRID_STEPS; i <= GRID_STEPS; i++) {
+        float f = (float)i;
+        bool  axis   = (i == 0);
+        bool  coarse = (!axis && i % 5 == 0);
+        float thick  = axis ? 2.0f : (coarse ? 1.5f : 1.0f);
+        float gray   = coarse ? 0.35f : 0.20f;
+
+        /* Lines running along Z at constant X — when i==0 this is the Z axis. */
+        float zr = axis ? 0.20f : gray;
+        float zg = axis ? 0.20f : gray;
+        float zb = axis ? 0.65f : gray;
+        grid_line(vp, (vec3_t){f, 0.0f, -GRID_EXTENT},
+                      (vec3_t){f, 0.0f,  GRID_EXTENT},
+                  sw, sh, thick, zr, zg, zb);
+
+        /* Lines running along X at constant Z — when i==0 this is the X axis. */
+        float xr = axis ? 0.65f : gray;
+        float xg = axis ? 0.20f : gray;
+        float xb = axis ? 0.20f : gray;
+        grid_line(vp, (vec3_t){-GRID_EXTENT, 0.0f, f},
+                      (vec3_t){ GRID_EXTENT, 0.0f, f},
+                  sw, sh, thick, xr, xg, xb);
+    }
+#undef GRID_EXTENT
+#undef GRID_STEPS
+}
+
+/* ---- undo/redo history ---- */
+
+static bool xforms_equal(const saved_xform_t *a, const saved_xform_t *b) {
+    return vec3_distance(a->position, b->position) < 1e-5f &&
+           vec3_distance(a->scale,    b->scale)    < 1e-5f &&
+           fabsf(quat_dot(a->rotation, b->rotation)) > 1.0f - 1e-6f;
+}
+
+static void history_push(history_t *h, cmd_t c) {
+    h->top = h->pos; /* discard redo tail */
+    if (h->top == HISTORY_CAP) {
+        memmove(&h->entries[0], &h->entries[1],
+                (HISTORY_CAP - 1) * sizeof(cmd_t));
+        h->top--;
+        h->pos--;
+    }
+    h->entries[h->top++] = c;
+    h->pos = h->top;
+}
+
+/* When an entity is re-created (undo DELETE / redo SPAWN) its handle changes.
+   Update every history entry that references the old handle. */
+static void history_update_entity(history_t *h, entity_t old_e, entity_t new_e) {
+    for (int i = 0; i < h->top; i++) {
+        if (h->entries[i].entity == old_e)
+            h->entries[i].entity = new_e;
+    }
+}
+
+static void history_undo(app_t *app) {
+    history_t *h = &app->history;
+    if (h->pos == 0) return;
+    h->pos--;
+    cmd_t *c = &h->entries[h->pos];
+    switch (c->type) {
+    case CMD_SPAWN:
+        if (entity_is_alive(app->world, c->entity)) {
+            if (app->selected == c->entity) app->selected = ECS_ENTITY_NULL;
+            entity_destroy(app->world, c->entity);
+        }
+        break;
+    case CMD_DELETE: {
+        entity_t old_e = c->entity;
+        entity_t e = spawn(app, c->proto, (vec3_t){0.0f, 0.0f, 0.0f});
+        if (e != ECS_ENTITY_NULL) {
+            transform_t *t =
+                entity_get_component(app->world, e, app->transform_id);
+            if (t) {
+                t->position = c->xform.position;
+                t->rotation = c->xform.rotation;
+                t->scale    = c->xform.scale;
+            }
+            history_update_entity(h, old_e, e);
+            app->selected = e;
+        }
+        break;
+    }
+    case CMD_TRANSFORM: {
+        transform_t *t =
+            entity_get_component(app->world, c->entity, app->transform_id);
+        if (t) {
+            t->position = c->xform.position;
+            t->rotation = c->xform.rotation;
+            t->scale    = c->xform.scale;
+        }
+        app->selected = c->entity;
+        break;
+    }
+    }
+}
+
+static void history_redo(app_t *app) {
+    history_t *h = &app->history;
+    if (h->pos == h->top) return;
+    cmd_t *c = &h->entries[h->pos];
+    h->pos++;
+    switch (c->type) {
+    case CMD_SPAWN: {
+        entity_t old_e = c->entity;
+        entity_t e = spawn(app, c->proto, (vec3_t){0.0f, 0.0f, 0.0f});
+        if (e != ECS_ENTITY_NULL) {
+            transform_t *t =
+                entity_get_component(app->world, e, app->transform_id);
+            if (t) {
+                t->position = c->xform.position;
+                t->rotation = c->xform.rotation;
+                t->scale    = c->xform.scale;
+            }
+            history_update_entity(h, old_e, e);
+            app->selected = e;
+        }
+        break;
+    }
+    case CMD_DELETE:
+        if (entity_is_alive(app->world, c->entity)) {
+            if (app->selected == c->entity) app->selected = ECS_ENTITY_NULL;
+            entity_destroy(app->world, c->entity);
+        }
+        break;
+    case CMD_TRANSFORM: {
+        transform_t *t =
+            entity_get_component(app->world, c->entity, app->transform_id);
+        if (t) {
+            t->position = c->xform2.position;
+            t->rotation = c->xform2.rotation;
+            t->scale    = c->xform2.scale;
+        }
+        app->selected = c->entity;
+        break;
+    }
+    }
+}
+
 /* Drive the transform gizmo for the selected entity. Runs after the scene's
    query has closed, so editing the transform in place is safe. */
 static void update_gizmo(app_t *app) {
@@ -353,9 +578,26 @@ static void update_gizmo(app_t *app) {
         .pointer_valid =
             !camera_is_navigating(&app->camera) && !app->ui_capture,
     };
+    bool was_dragging = app->gizmo.dragging;
+    saved_xform_t pre = {t->position, t->rotation, t->scale};
     app->gizmo_capture =
         gizmo_update(&app->gizmo, &app->camera, (float)w, (float)h, &in,
                      &t->position, &t->rotation, &t->scale);
+    bool now_dragging = app->gizmo.dragging;
+
+    if (!was_dragging && now_dragging)
+        app->gizmo_drag_start = pre;
+
+    if (was_dragging && !now_dragging) {
+        saved_xform_t post = {t->position, t->rotation, t->scale};
+        if (!xforms_equal(&app->gizmo_drag_start, &post))
+            history_push(&app->history, (cmd_t){
+                .type   = CMD_TRANSFORM,
+                .entity = app->selected,
+                .xform  = app->gizmo_drag_start,
+                .xform2 = post,
+            });
+    }
 }
 
 /* Snapshot the live renderable entities into `out` (so the world isn't mutated
@@ -562,6 +804,7 @@ static void scene_do_load(app_t *app) {
         entity_destroy(app->world, ents[i]);
     }
     app->selected = ECS_ENTITY_NULL;
+    app->history = (history_t){0}; /* load replaces the scene; history is stale */
 
     /* Spawn from file, overriding the default transform with the saved one. */
     int spawned = 0;
@@ -638,6 +881,7 @@ static void build_ui(app_t *app) {
     bool prev_wire = app->wireframe;
     ui_checkbox(&app->ui, "wireframe", &app->wireframe);
     if (app->wireframe != prev_wire) render_set_wireframe(app->wireframe);
+    ui_checkbox(&app->ui, "grid", &app->show_grid);
     if (app->fly_mode) {
         ui_text(&app->ui, "FLY MODE  (TAB to exit)");
         ui_text(&app->ui, "pos  %.1f %.1f %.1f",
@@ -690,7 +934,18 @@ static void build_ui(app_t *app) {
         }
         /* Spawn at the orbit target — pan the camera to place where it lands. */
         if (ui_button(&app->ui, "add at target")) {
-            app->selected = spawn(app, app->sel_prototype, app->camera.target);
+            entity_t e = spawn(app, app->sel_prototype, app->camera.target);
+            if (e != ECS_ENTITY_NULL) {
+                app->selected = e;
+                transform_t *t =
+                    entity_get_component(app->world, e, app->transform_id);
+                history_push(&app->history, (cmd_t){
+                    .type  = CMD_SPAWN,
+                    .entity = e,
+                    .proto = app->sel_prototype,
+                    .xform = {t->position, t->rotation, t->scale},
+                });
+            }
         }
     }
 
@@ -715,9 +970,25 @@ static void build_ui(app_t *app) {
     }
     if (ui_button(&app->ui, "remove") &&
         app->selected != ECS_ENTITY_NULL) {
-        entity_destroy(app->world, app->selected);
+        entity_t dying = app->selected;
+        transform_t *dt = entity_get_component(app->world, dying, app->transform_id);
+        renderable_t *dr = entity_get_component(app->world, dying, app->renderable_id);
+        if (dt && dr) {
+            prototype_t *p = prototype_for_mesh(app, dr->mesh);
+            if (p)
+                history_push(&app->history, (cmd_t){
+                    .type  = CMD_DELETE,
+                    .entity = dying,
+                    .proto = (int)(p - app->prototypes),
+                    .xform = {dt->position, dt->rotation, dt->scale},
+                });
+        }
+        entity_destroy(app->world, dying);
         app->selected = ECS_ENTITY_NULL;
     }
+
+    if (ui_button(&app->ui, "undo (C-z)")) history_undo(app);
+    if (ui_button(&app->ui, "redo (C-y)")) history_redo(app);
 
     ui_separator(&app->ui);
 
@@ -729,6 +1000,122 @@ static void build_ui(app_t *app) {
     }
 
     ui_panel_end(&app->ui);
+
+    /* --- outliner panel (right side) --- */
+    {
+        const float OUTLINER_W = 220.0f;
+        const int   VISIBLE    = 10;
+        float ox = (float)w - OUTLINER_W - 12.0f;
+
+        /* Collect entities fresh (cheap ECS query). */
+        entity_t oents[256];
+        int oecount = collect_entities(app, oents, 256);
+
+        /* Apply wheel scroll and clamp. */
+        app->outliner_scroll += app->outliner_pending_scroll;
+        app->outliner_pending_scroll = 0;
+        int max_scroll = oecount - VISIBLE;
+        if (max_scroll < 0) max_scroll = 0;
+        if (app->outliner_scroll < 0) app->outliner_scroll = 0;
+        if (app->outliner_scroll > max_scroll) app->outliner_scroll = max_scroll;
+
+        /* Auto-scroll the selected entity into view. */
+        if (app->selected != ECS_ENTITY_NULL) {
+            for (int i = 0; i < oecount; i++) {
+                if (oents[i] == app->selected) {
+                    if (i < app->outliner_scroll)
+                        app->outliner_scroll = i;
+                    if (i >= app->outliner_scroll + VISIBLE)
+                        app->outliner_scroll = i - VISIBLE + 1;
+                    break;
+                }
+            }
+        }
+
+        ui_panel_begin(&app->ui, ox, 12.0f, OUTLINER_W);
+        ui_text(&app->ui, "OUTLINER  %d", oecount);
+        ui_separator(&app->ui);
+
+        int vis_end = app->outliner_scroll + VISIBLE;
+        if (vis_end > oecount) vis_end = oecount;
+
+        for (int i = app->outliner_scroll; i < vis_end; i++) {
+            entity_t e = oents[i];
+            renderable_t *r =
+                entity_get_component(app->world, e, app->renderable_id);
+            prototype_t *p = r ? prototype_for_mesh(app, r->mesh) : NULL;
+            char row[64];
+            snprintf(row, sizeof(row), "%s  #%d", p ? p->name : "?", i);
+            if (ui_selectable(&app->ui, row, e == app->selected))
+                app->selected = e;
+        }
+
+        if (oecount > VISIBLE) {
+            ui_separator(&app->ui);
+            ui_text(&app->ui, "%d-%d / %d  (scroll)",
+                    app->outliner_scroll + 1, vis_end, oecount);
+        }
+
+        ui_panel_end(&app->ui);
+    }
+
+    /* --- properties panel (below the outliner) --- */
+    if (app->selected != ECS_ENTITY_NULL &&
+        entity_is_alive(app->world, app->selected)) {
+        transform_t *t =
+            entity_get_component(app->world, app->selected, app->transform_id);
+        if (t) {
+            const float PROP_W  = 220.0f;
+            const int   OUTLINER_IDX = 1; /* outliner is the second panel (index 1) */
+            float px = (float)w - PROP_W - 12.0f;
+            float py = 12.0f + app->ui.panel_height[OUTLINER_IDX] + 8.0f;
+
+            saved_xform_t before = {t->position, t->rotation, t->scale};
+            bool any = false;
+
+            ui_panel_begin(&app->ui, px, py, PROP_W);
+            ui_text(&app->ui, "TRANSFORM  %s", selected_name(app));
+            ui_separator(&app->ui);
+
+            any |= ui_drag_float(&app->ui, "pos X", &t->position.x, 0.02f);
+            any |= ui_drag_float(&app->ui, "pos Y", &t->position.y, 0.02f);
+            any |= ui_drag_float(&app->ui, "pos Z", &t->position.z, 0.02f);
+            ui_separator(&app->ui);
+
+            vec3_t eu = quat_to_euler_deg(t->rotation);
+            bool rot = false;
+            rot |= ui_drag_float(&app->ui, "rot X", &eu.x, 0.5f);
+            rot |= ui_drag_float(&app->ui, "rot Y", &eu.y, 0.5f);
+            rot |= ui_drag_float(&app->ui, "rot Z", &eu.z, 0.5f);
+            if (rot) t->rotation = euler_deg_to_quat(eu);
+            any |= rot;
+            ui_separator(&app->ui);
+
+            any |= ui_drag_float(&app->ui, "scl X", &t->scale.x, 0.005f);
+            any |= ui_drag_float(&app->ui, "scl Y", &t->scale.y, 0.005f);
+            any |= ui_drag_float(&app->ui, "scl Z", &t->scale.z, 0.005f);
+
+            ui_panel_end(&app->ui);
+
+            /* Gesture-based history: snapshot on first motion, commit on release. */
+            if (any && !app->prop_editing) {
+                app->prop_editing   = true;
+                app->prop_edit_start = before;
+            }
+            if (app->prop_editing && app->ui.went_up) {
+                saved_xform_t after = {t->position, t->rotation, t->scale};
+                if (!xforms_equal(&app->prop_edit_start, &after))
+                    history_push(&app->history, (cmd_t){
+                        .type   = CMD_TRANSFORM,
+                        .entity = app->selected,
+                        .xform  = app->prop_edit_start,
+                        .xform2 = after,
+                    });
+                app->prop_editing = false;
+            }
+        }
+    }
+
     ui_end(&app->ui);
 
     app->ui_capture = ui_wants_mouse(&app->ui);
@@ -758,6 +1145,71 @@ void app_run(app_t *app) {
                 (event.type == EVENT_KEY_DOWN &&
                  event.key.code == KEY_ESCAPE)) {
                 running = false;
+                continue;
+            }
+
+            /* Ctrl+Z undo / Ctrl+Y redo / Ctrl+D duplicate. */
+            if (event.type == EVENT_KEY_DOWN && event.key.ctrl) {
+                if (event.key.code == KEY_Z) { history_undo(app); continue; }
+                if (event.key.code == KEY_Y) { history_redo(app); continue; }
+                if (event.key.code == KEY_D &&
+                    app->selected != ECS_ENTITY_NULL &&
+                    entity_is_alive(app->world, app->selected)) {
+                    renderable_t *dr =
+                        entity_get_component(app->world, app->selected,
+                                             app->renderable_id);
+                    transform_t *dt =
+                        entity_get_component(app->world, app->selected,
+                                             app->transform_id);
+                    if (dr && dt) {
+                        prototype_t *dp = prototype_for_mesh(app, dr->mesh);
+                        int pidx = dp ? (int)(dp - app->prototypes) : -1;
+                        if (pidx >= 0) {
+                            /* Copy before spawn — ECS may reallocate on entity_create. */
+                            vec3_t dpos = dt->position;
+                            quat_t drot = dt->rotation;
+                            vec3_t dscl = dt->scale;
+                            vec3_t at = {dpos.x + 0.5f, dpos.y, dpos.z + 0.5f};
+                            entity_t ne = spawn(app, pidx, at);
+                            if (ne != ECS_ENTITY_NULL) {
+                                transform_t *nt = entity_get_component(
+                                    app->world, ne, app->transform_id);
+                                if (nt) {
+                                    nt->rotation = drot;
+                                    nt->scale    = dscl;
+                                    history_push(&app->history, (cmd_t){
+                                        .type   = CMD_SPAWN,
+                                        .entity = ne,
+                                        .proto  = pidx,
+                                        .xform  = {nt->position, drot, dscl},
+                                    });
+                                }
+                                app->selected = ne;
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            /* F focuses the orbit camera on the selected entity. */
+            if (event.type == EVENT_KEY_DOWN && event.key.code == KEY_F &&
+                !app->fly_mode &&
+                app->selected != ECS_ENTITY_NULL &&
+                entity_is_alive(app->world, app->selected)) {
+                transform_t *ft =
+                    entity_get_component(app->world, app->selected,
+                                         app->transform_id);
+                if (ft) {
+                    app->camera.target = ft->position;
+                    float size = ft->scale.x;
+                    if (ft->scale.y > size) size = ft->scale.y;
+                    if (ft->scale.z > size) size = ft->scale.z;
+                    float d = size * 4.0f;
+                    if (d < 0.5f)   d = 0.5f;
+                    if (d > 100.0f) d = 100.0f;
+                    app->camera.distance = d;
+                }
                 continue;
             }
 
@@ -821,6 +1273,15 @@ void app_run(app_t *app) {
                 break;
             }
 
+            /* Scroll over the right-side outliner panel goes to the outliner. */
+            if (event.type == EVENT_SCROLL && app->ui_capture) {
+                uint32_t scroll_w, scroll_h;
+                window_size(app->window, &scroll_w, &scroll_h);
+                if (app->mouse_x > (float)scroll_w * 0.5f)
+                    app->outliner_pending_scroll +=
+                        (event.scroll.delta > 0.0f) ? -1 : 1;
+            }
+
             /* In fly mode feed mouse deltas to the fps camera; in orbit mode
                pass events to the orbit camera (gated by UI/gizmo ownership). */
             bool mouse_ev = event.type == EVENT_MOUSE_MOTION ||
@@ -877,6 +1338,7 @@ void app_run(app_t *app) {
         }
 
         render_scene(app);
+        if (app->show_grid) draw_grid(app);
         if (!app->fly_mode)
             update_gizmo(app);
         build_ui(app);

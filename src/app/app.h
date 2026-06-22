@@ -11,6 +11,31 @@
 #include "ui.h"
 #include "ecs.h"
 
+/* Snapshot of an entity's transform — used by the undo/redo history. */
+typedef struct {
+    vec3_t position;
+    quat_t rotation;
+    vec3_t scale;
+} saved_xform_t;
+
+typedef enum { CMD_SPAWN, CMD_DELETE, CMD_TRANSFORM } cmd_type_t;
+
+typedef struct {
+    cmd_type_t    type;
+    entity_t      entity;   /* live handle; updated when entity is re-created */
+    int           proto;    /* prototype index (SPAWN / DELETE) */
+    saved_xform_t xform;    /* SPAWN/DELETE: the saved transform; TRANSFORM: before */
+    saved_xform_t xform2;   /* TRANSFORM: after */
+} cmd_t;
+
+#define HISTORY_CAP 64
+
+typedef struct {
+    cmd_t entries[HISTORY_CAP];
+    int   top;   /* entries[0..top-1] are valid */
+    int   pos;   /* current undo position; pos==top means nothing to redo */
+} history_t;
+
 /* World-space placement of an entity. The only component for now; lives here
  * (rather than its own module) until a second component justifies one. */
 typedef struct {
@@ -113,6 +138,20 @@ typedef struct {
     /* Instanced ground-plane cubes — exercises the GPU cull + indirect path. */
     mesh_handle_t     inst_mesh;
     material_handle_t inst_mat;
+
+    /* Undo/redo history for scene mutations (spawn, delete, transform). */
+    history_t     history;
+    saved_xform_t gizmo_drag_start; /* transform snapshot at the start of a gizmo drag */
+
+    bool show_grid;
+
+    /* Outliner scroll state (right-side panel). */
+    int outliner_scroll;         /* first visible row index */
+    int outliner_pending_scroll; /* wheel delta accumulated in event loop */
+
+    /* Properties inspector drag gesture tracking. */
+    bool          prop_editing;     /* true while a drag-float field is held */
+    saved_xform_t prop_edit_start;  /* transform snapshot at drag-start */
 } app_t;
 
 bool app_init(app_t *app);

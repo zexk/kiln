@@ -25,8 +25,8 @@
 #define WIN_W          1280
 #define WIN_H          720
 
-#define MAX_NEEDLES    3000
-#define BASE_SPAWN      3       /* needles per sub-step */
+#define MAX_NEEDLES   10000
+#define BASE_SPAWN      5       /* needles per sub-step */
 #define FIELD_HALF     40.0f   /* lines from -FIELD_HALF to +FIELD_HALF in Z */
 #define LINE_SPACING    1.0f
 #define NEEDLE_LEN      1.0f   /* == LINE_SPACING, so P = 2/pi */
@@ -138,8 +138,8 @@ int main(void) {
     fps_camera_t cam;
     fps_camera_init(&cam);
     cam.yaw   =  KLN_PI * 0.5f;  /* look along +Z */
-    cam.pitch = -0.45f;           /* look down ~26° */
-    vec3_t cam_pos = {0.0f, 14.0f, -18.0f};
+    cam.pitch = -0.40f;           /* look down ~23° — enough to see the whole field */
+    vec3_t cam_pos = {0.0f, 40.0f, -70.0f};
     /* recompute front after setting yaw/pitch manually */
     fps_camera_rotate(&cam, 0.0f, 0.0f);
 

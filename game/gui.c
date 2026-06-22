@@ -20,19 +20,20 @@ static float gui_ndc_y(const Gui *gui, float y) {
 }
 
 static void gui_draw_triangles(Gui *gui, const float *verts, int vertex_count, float r, float g, float b, float a) {
-    gui_set_color(gui, r, g, b, a);
-    renderer_bind_vao(gui->vao);
-    renderer_bind_buffer(R_BUF_ARRAY, gui->vbo);
-    renderer_buffer_data(R_BUF_ARRAY, (size_t)vertex_count * 2 * sizeof(float), verts, R_USAGE_DYNAMIC);
-    renderer_draw_arrays(R_PRIM_TRIANGLES, 0, vertex_count);
-}
+    /* Each draw gets its own slice of the pre-allocated VBO so that all draws
+       issued in a frame remain valid when the command buffer executes on the GPU.
+       Without this, every call overwrites offset 0 and all-but-last draws are
+       silently corrupted (the GPU reads stale data). */
+    size_t byte_off  = (size_t)gui->batch_floats * sizeof(float);
+    size_t byte_size = (size_t)(vertex_count * 2) * sizeof(float);
+    if (byte_off + byte_size > GUI_VBO_BYTES) return; /* overflow guard */
 
-static void gui_draw_lines(Gui *gui, const float *verts, int vertex_count, float r, float g, float b, float a) {
     gui_set_color(gui, r, g, b, a);
     renderer_bind_vao(gui->vao);
     renderer_bind_buffer(R_BUF_ARRAY, gui->vbo);
-    renderer_buffer_data(R_BUF_ARRAY, (size_t)vertex_count * 2 * sizeof(float), verts, R_USAGE_DYNAMIC);
-    renderer_draw_arrays(R_PRIM_LINES, 0, vertex_count);
+    renderer_buffer_sub_data(R_BUF_ARRAY, byte_off, byte_size, verts);
+    renderer_draw_arrays(R_PRIM_TRIANGLES, gui->batch_floats / 2, vertex_count);
+    gui->batch_floats += vertex_count * 2;
 }
 
 static void gui_fill_rect(Gui *gui, float x, float y, float w, float h, float r, float g, float b, float a) {
@@ -48,17 +49,11 @@ static void gui_fill_rect(Gui *gui, float x, float y, float w, float h, float r,
 }
 
 static void gui_border_rect(Gui *gui, float x, float y, float w, float h, float r, float g, float b, float a) {
-    float x0 = gui_ndc_x(gui, x);
-    float y0 = gui_ndc_y(gui, y);
-    float x1 = gui_ndc_x(gui, x + w);
-    float y1 = gui_ndc_y(gui, y + h);
-    float verts[] = {
-        x0, y0,  x1, y0,
-        x1, y0,  x1, y1,
-        x1, y1,  x0, y1,
-        x0, y1,  x0, y0,
-    };
-    gui_draw_lines(gui, verts, 8, r, g, b, a);
+    float t = 2.0f;
+    gui_fill_rect(gui, x,       y,       w,       t,       r, g, b, a); /* top    */
+    gui_fill_rect(gui, x,       y+h-t,   w,       t,       r, g, b, a); /* bottom */
+    gui_fill_rect(gui, x,       y+t,     t,       h-2*t,   r, g, b, a); /* left   */
+    gui_fill_rect(gui, x+w-t,   y+t,     t,       h-2*t,   r, g, b, a); /* right  */
 }
 
 static bool gui_point_in_rect(const Gui *gui, float x, float y, float w, float h) {
@@ -110,6 +105,7 @@ void gui_init(Gui *gui, R_Program program) {
     gui->vbo = renderer_create_buffer();
     renderer_bind_vao(gui->vao);
     renderer_bind_buffer(R_BUF_ARRAY, gui->vbo);
+    renderer_buffer_data(R_BUF_ARRAY, GUI_VBO_BYTES, NULL, R_USAGE_DYNAMIC);
     renderer_attrib_pointer(0, 2, R_TYPE_FLOAT, false, 2 * sizeof(float), 0);
     renderer_enable_attrib(0);
     renderer_bind_vao(R_INVALID_HANDLE);
@@ -134,6 +130,7 @@ void gui_begin_frame(Gui *gui, int width, int height, int mouse_x, int mouse_y, 
     gui->mouse_y = (float)mouse_y;
     gui->mouse_down = mouse_down;
     gui->mouse_pressed = mouse_down && !was_down;
+    gui->batch_floats = 0; /* rewind the VBO linear allocator each frame */
 }
 
 void gui_write_text(Gui *gui, float x, float y, const char *text, float scale, float r, float g, float b) {
@@ -155,6 +152,11 @@ void gui_write_text(Gui *gui, float x, float y, const char *text, float scale, f
         }
         x += (GUI_FONT_W + 1) * scale;
     }
+}
+
+float gui_text_width(const char *text, float scale) {
+    int n = text ? (int)strlen(text) : 0;
+    return n > 0 ? (float)(n * (GUI_FONT_W + 1) - 1) * scale : 0.0f;
 }
 
 bool gui_create_button(Gui *gui, float x, float y, float w, float h, const char *text, GuiCallback callback, void *userdata) {

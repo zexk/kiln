@@ -177,7 +177,10 @@ int main(void) {
             case EVENT_KEY_DOWN:
                 if (ev.key.code < KEY_COUNT) keys[ev.key.code] = true;
                 if (ev.key.code == KEY_ESCAPE) running = false;
-                if (ev.key.code == KEY_SPACE)  paused = !paused;
+                if (ev.key.code == KEY_SPACE) {
+                    paused = !paused;
+                    window_set_cursor_mode(win, paused ? CURSOR_NORMAL : CURSOR_DISABLED);
+                }
                 if (ev.key.keysym == 'r' || ev.key.keysym == 'R')
                     { g_count = 0; g_total = 0; g_cross = 0; }
                 if (ev.key.keysym == '=' || ev.key.keysym == '+')

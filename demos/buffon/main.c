@@ -27,11 +27,16 @@
 
 #define MAX_NEEDLES    3000
 #define BASE_SPAWN      3       /* needles per sub-step */
-#define FIELD_HALF     15.0f   /* lines from -FIELD_HALF to +FIELD_HALF in Z */
 #define LINE_SPACING    1.0f
 #define NEEDLE_LEN      1.0f   /* == LINE_SPACING, so P = 2/pi */
 #define NEEDLE_GRAVITY 12.0f
 #define SPAWN_Y        10.0f
+
+/* Ever-expanding field: lines are pre-built for the full range; each frame
+   we grow g_field_r with sqrt(total) and render only the visible slice. */
+#define MAX_LINES     200          /* covers z = -100 .. +99 */
+#define MAX_FIELD    (MAX_LINES / 2.0f)
+#define FIELD_INIT    4.0f
 
 #define SUBSTEP_DT     (1.0f / 60.0f)
 
@@ -47,9 +52,11 @@ typedef struct {
 } needle_t;
 
 static needle_t g_needles[MAX_NEEDLES];
-static int      g_count    = 0;   /* ring fill level */
-static long     g_total    = 0;   /* all-time landings */
-static long     g_cross    = 0;   /* all-time crossings */
+static int      g_count    = 0;
+static long     g_total    = 0;
+static long     g_cross    = 0;
+static float    g_field_r  = FIELD_INIT;
+static mat4_t   g_line_models[MAX_LINES];
 
 /* Solid callback: the ground plane is at y = 0; anything below is solid. */
 static bool ground_solid(void *ctx, int x, int y, int z) {
@@ -61,8 +68,8 @@ static void spawn_needle(void) {
     if (g_count >= MAX_NEEDLES) g_count = 0;
     needle_t *n = &g_needles[g_count++];
     n->body = (phys_body_t){
-        .position = { randf(-FIELD_HALF, FIELD_HALF), SPAWN_Y,
-                      randf(-FIELD_HALF, FIELD_HALF) },
+        .position = { randf(-g_field_r, g_field_r), SPAWN_Y,
+                      randf(-g_field_r, g_field_r) },
         .velocity = {0},
         .half_w   = 0.02f,
         .foot_off = 0.01f,
@@ -118,21 +125,16 @@ int main(void) {
     material_handle_t mat_line   = render_create_material(
         (vec4_t){0.45f, 0.65f, 0.85f, 1.0f}, RENDER_TEXTURE_INVALID);
 
-    /* ---- precompute line model matrices ---- */
-    int n_lines = (int)(2.0f * FIELD_HALF / LINE_SPACING) + 1;
-    mat4_t *line_models = malloc(sizeof(mat4_t) * (uint32_t)n_lines);
-    for (int i = 0; i < n_lines; i++) {
-        float z = -FIELD_HALF + i * LINE_SPACING;
-        line_models[i] = mat4_from_trs(
+    /* ---- precompute all line model matrices for the full range ---- */
+    /* Lines are at z = -MAX_FIELD + i; X scale is 2*MAX_FIELD so they always
+       extend past the visible field without needing per-frame updates. */
+    for (int i = 0; i < MAX_LINES; i++) {
+        float z = -MAX_FIELD + (float)i * LINE_SPACING;
+        g_line_models[i] = mat4_from_trs(
             (vec3_t){0.0f, 0.003f, z},
             quat_identity(),
-            (vec3_t){FIELD_HALF * 2.0f, 0.006f, 0.04f});
+            (vec3_t){MAX_FIELD * 2.0f, 0.006f, 0.04f});
     }
-
-    mat4_t ground_model = mat4_from_trs(
-        (vec3_t){0.0f, -0.005f, 0.0f},
-        quat_identity(),
-        (vec3_t){FIELD_HALF * 2.5f, 0.008f, FIELD_HALF * 2.5f});
 
     /* ---- camera ---- */
     fps_camera_t cam;
@@ -179,7 +181,7 @@ int main(void) {
                 if (ev.key.code == KEY_ESCAPE) running = false;
                 if (ev.key.code == KEY_SPACE)  paused = !paused;
                 if (ev.key.keysym == 'r' || ev.key.keysym == 'R')
-                    { g_count = 0; g_total = 0; g_cross = 0; }
+                    { g_count = 0; g_total = 0; g_cross = 0; g_field_r = FIELD_INIT; }
                 if (ev.key.keysym == '=' || ev.key.keysym == '+')
                     { timescale *= 2.0f; if (timescale > 64.0f) timescale = 64.0f; }
                 if (ev.key.keysym == '-')
@@ -228,15 +230,37 @@ int main(void) {
             }
         }
 
+        /* grow the field with sqrt(total) so it expands fast at first then slows */
+        {
+            float target = FIELD_INIT + sqrtf((float)g_total) * 0.10f;
+            if (target > g_field_r) g_field_r = target;
+            if (g_field_r > MAX_FIELD - 1.0f) g_field_r = MAX_FIELD - 1.0f;
+        }
+
         /* ---- render ---- */
         float aspect = h > 0 ? (float)w / (float)h : 1.0f;
         mat4_t view  = fps_camera_view(&cam, cam_pos);
-        mat4_t proj  = mat4_perspective(kln_radians(60.0f), aspect, 0.1f, 300.0f);
+        mat4_t proj  = mat4_perspective(kln_radians(60.0f), aspect, 0.1f, 600.0f);
         render_set_camera(view, proj);
 
+        /* ground expands with the field */
+        mat4_t ground_model = mat4_from_trs(
+            (vec3_t){0.0f, -0.005f, 0.0f},
+            quat_identity(),
+            (vec3_t){(g_field_r + 1.0f) * 2.2f, 0.008f,
+                     (g_field_r + 1.0f) * 2.2f});
         render_mesh(ground_mesh, mat_ground, ground_model);
-        render_mesh_instanced(line_mesh, mat_line,
-                              line_models, (uint32_t)n_lines);
+
+        /* slice of g_line_models whose z is within the current field */
+        {
+            int i_lo = (int)(MAX_FIELD - g_field_r - 1.0f);
+            int i_hi = (int)(MAX_FIELD + g_field_r + 2.0f);
+            if (i_lo < 0)         i_lo = 0;
+            if (i_hi > MAX_LINES) i_hi = MAX_LINES;
+            render_mesh_instanced(line_mesh, mat_line,
+                                  &g_line_models[i_lo],
+                                  (uint32_t)(i_hi - i_lo));
+        }
 
         int n_hit = 0, n_miss = 0, n_fly = 0;
         for (int i = 0; i < g_count; i++) {
@@ -277,7 +301,7 @@ int main(void) {
         render_draw();
     }
 
-    free(inst_hit); free(inst_miss); free(inst_fly); free(line_models);
+    free(inst_hit); free(inst_miss); free(inst_fly);
     render_shutdown();
     window_destroy(win);
     return 0;

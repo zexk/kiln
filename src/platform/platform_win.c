@@ -123,10 +123,16 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         w->width  = (uint32_t)LOWORD(lp);
         w->height = (uint32_t)HIWORD(lp);
         if (w->width > 0 && w->height > 0) {
-            ev.type         = EVENT_RESIZE;
+            ev.type          = EVENT_RESIZE;
             ev.resize.width  = w->width;
             ev.resize.height = w->height;
             push_event(w, ev);
+            if (w->cursor_mode == CURSOR_DISABLED) {
+                RECT cr;
+                GetClientRect(w->hwnd, &cr);
+                MapWindowPoints(w->hwnd, NULL, (LPPOINT)&cr, 2);
+                ClipCursor(&cr);
+            }
         }
         break;
 

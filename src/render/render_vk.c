@@ -806,24 +806,15 @@ static bool create_device(void) {
 /* ----------------------------------------------------------------------- */
 
 static VkExtent2D choose_extent(const VkSurfaceCapabilitiesKHR *caps) {
-    if (caps->currentExtent.width != UINT32_MAX) {
-        return caps->currentExtent;
-    }
+    /* Always use the platform window size rather than caps.currentExtent:
+       on Wine, currentExtent is often stale after an external WM resize. */
     uint32_t w, h;
     window_size(g.window, &w, &h);
     VkExtent2D e = {w, h};
-    if (e.width < caps->minImageExtent.width) {
-        e.width = caps->minImageExtent.width;
-    }
-    if (e.height < caps->minImageExtent.height) {
-        e.height = caps->minImageExtent.height;
-    }
-    if (e.width > caps->maxImageExtent.width) {
-        e.width = caps->maxImageExtent.width;
-    }
-    if (e.height > caps->maxImageExtent.height) {
-        e.height = caps->maxImageExtent.height;
-    }
+    if (e.width  < caps->minImageExtent.width)  e.width  = caps->minImageExtent.width;
+    if (e.width  > caps->maxImageExtent.width)  e.width  = caps->maxImageExtent.width;
+    if (e.height < caps->minImageExtent.height) e.height = caps->minImageExtent.height;
+    if (e.height > caps->maxImageExtent.height) e.height = caps->maxImageExtent.height;
     return e;
 }
 
@@ -3928,6 +3919,16 @@ void render_draw(void) {
     if (g.extent.width == 0 || g.extent.height == 0) {
         recreate_swapchain();
         return;
+    }
+    /* Proactively recreate when the window size changed (Wine does not
+       reliably return VK_SUBOPTIMAL_KHR/OUT_OF_DATE on external resize). */
+    {
+        uint32_t pw, ph;
+        window_size(g.window, &pw, &ph);
+        if (pw != g.extent.width || ph != g.extent.height) {
+            recreate_swapchain();
+            return;
+        }
     }
     if (g.vsync_dirty) {
         g.vsync_dirty = false;

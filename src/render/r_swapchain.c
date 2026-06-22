@@ -4,11 +4,21 @@ bool create_swapchain(void) {
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_vk.physical_device, g_vk.surface, &caps);
 
-    g_vk.swap_extent = caps.currentExtent;
-    if (g_vk.swap_extent.width == UINT32_MAX) {
-        g_vk.swap_extent.width  = (uint32_t)g_vk.width;
-        g_vk.swap_extent.height = (uint32_t)g_vk.height;
-    }
+    /* Always derive extent from the app-tracked size rather than trusting
+       caps.currentExtent: on Wine, currentExtent is often stale after an
+       external WM resize.  g_vk.width/height is kept current via
+       renderer_viewport (called from EVENT_RESIZE) so it's authoritative. */
+    uint32_t ew = (uint32_t)g_vk.width;
+    uint32_t eh = (uint32_t)g_vk.height;
+    if (ew < caps.minImageExtent.width)  ew = caps.minImageExtent.width;
+    if (ew > caps.maxImageExtent.width)  ew = caps.maxImageExtent.width;
+    if (eh < caps.minImageExtent.height) eh = caps.minImageExtent.height;
+    if (eh > caps.maxImageExtent.height) eh = caps.maxImageExtent.height;
+    g_vk.swap_extent.width  = ew;
+    g_vk.swap_extent.height = eh;
+    /* Keep g_vk.width/height in sync with the actual extent created. */
+    g_vk.width  = (int)ew;
+    g_vk.height = (int)eh;
 
     uint32_t fmt_count = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(g_vk.physical_device, g_vk.surface, &fmt_count, NULL);

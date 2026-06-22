@@ -53,6 +53,11 @@ typedef struct {
 
     float panel_height[UI_MAX_PANELS]; /* cached so the bg can be drawn first */
 
+    /* Persistent state for ui_drag_float: the reference mouse-x and value
+       captured when the drag started, kept across frames while active. */
+    float drag_ref_x;
+    float drag_ref_val;
+
     ui_draw_t draw; /* set by ui_begin each frame */
 } ui_t;
 
@@ -77,6 +82,15 @@ bool ui_slider_float(ui_t *ui, const char *label, float *value, float min,
 bool ui_slider_int(ui_t *ui, const char *label, int *value, int min, int max);
 void ui_progress(ui_t *ui, const char *label, float value, float max);
 bool ui_input_int(ui_t *ui, const char *label, int *value, int step);
+
+/* A left-aligned, click-to-select row.  `selected` tints the background blue
+   even when not hovered, indicating the active selection.  Returns true the
+   frame the row is clicked. */
+bool ui_selectable(ui_t *ui, const char *label, bool selected);
+
+/* A numeric drag field: click and drag left/right to change `*value` by
+   `speed` units per pixel.  Returns true every frame the value changes. */
+bool ui_drag_float(ui_t *ui, const char *label, float *value, float speed);
 
 /* Rolling bar chart of `count` float samples stored in a circular buffer.
    `head` is the index of the next write slot (oldest sample = head % count).

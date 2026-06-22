@@ -302,6 +302,58 @@ void ui_graph(ui_t *ui, const char *label,
                   COL_TEXT[0], COL_TEXT[1], COL_TEXT[2], buf);
 }
 
+bool ui_selectable(ui_t *ui, const char *label, bool selected) {
+    int id = ++ui->id_counter;
+    float x, y, w, h;
+    next_row(ui, &x, &y, &w, &h);
+
+    bool over = widget_over(ui, x, y, w, h);
+    if (over) ui->hot_id = id;
+    bool clicked = false;
+    if (ui->active_id == id) {
+        if (ui->went_up) {
+            if (over) clicked = true;
+            ui->active_id = 0;
+        }
+    } else if (over && ui->went_down) {
+        ui->active_id = id;
+    }
+
+    const float *c = (ui->active_id == id && over) ? COL_ACTIVE
+                     : selected                     ? COL_FILL
+                     : over                         ? COL_HOT
+                                                    : COL_WIDGET;
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, c[0], c[1], c[2]);
+    draw_label(ui, x + 6.0f, y, h, label);
+    return clicked;
+}
+
+bool ui_drag_float(ui_t *ui, const char *label, float *value, float speed) {
+    int id = ++ui->id_counter;
+    float x, y, w, h;
+    next_row(ui, &x, &y, &w, &h);
+
+    bool over = widget_over(ui, x, y, w, h);
+    if (over) ui->hot_id = id;
+    bool changed = false;
+    if (ui->active_id == id) {
+        float nv = ui->drag_ref_val + (ui->in.mouse_x - ui->drag_ref_x) * speed;
+        if (nv != *value) { *value = nv; changed = true; }
+        if (ui->went_up) ui->active_id = 0;
+    } else if (over && ui->went_down) {
+        ui->active_id   = id;
+        ui->drag_ref_x   = ui->in.mouse_x;
+        ui->drag_ref_val = *value;
+    }
+
+    const float *c = (ui->active_id == id) ? COL_ACTIVE : over ? COL_HOT : COL_WIDGET;
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, c[0], c[1], c[2]);
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s: %.3f", label, (double)*value);
+    draw_label(ui, x + 6.0f, y, h, buf);
+    return changed;
+}
+
 bool ui_input_int(ui_t *ui, const char *label, int *value, int step) {
     int id_m = ++ui->id_counter;
     int id_p = ++ui->id_counter;

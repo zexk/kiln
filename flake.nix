@@ -56,8 +56,9 @@
           cmakeFlags = [ "-DBUILD_TESTING=OFF" ];
           buildPhase = "cmake --build . --target buffon";
           installPhase = ''
-            mkdir -p $out/bin
+            mkdir -p $out/bin $out/share/kiln/shaders
             cp demos/buffon/buffon $out/bin/
+            cp src/render/shaders/*.spv $out/share/kiln/shaders/
           '';
         };
 

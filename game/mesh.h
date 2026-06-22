@@ -21,8 +21,11 @@ typedef struct {
     R_Buffer  atomic_counter_buffer;
 } Mesh;
 
+#define LOD_LEVELS 3
+
 void mesh_init(Mesh *mesh);
 void mesh_generate_greedy(Mesh *mesh, const Chunk *chunk);
+void mesh_generate_lod(Mesh *mesh, const Chunk *chunk, int step);
 void mesh_generate_gpu(Mesh *mesh, R_Program compute_program, R_Texture voxel_tex, int chunk_x, int chunk_z);
 void mesh_upload(Mesh *mesh);
 void mesh_prepare_gpu(Mesh *mesh);

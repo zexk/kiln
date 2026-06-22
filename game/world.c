@@ -15,7 +15,7 @@
 #  define kyub_mkdir(path) mkdir(path, 0755)
 #endif
 
-#define MAX_RENDER_DISTANCE 8
+#define MAX_RENDER_DISTANCE 16
 #define WORLD_SAVE_DIR      "saves/default"
 #define CHUNK_SAVE_MAGIC    "KYUBCHNK"
 #define CHUNK_SAVE_MAJOR    1
@@ -207,11 +207,14 @@ done:
     return loaded_blocks;
 }
 
+static const int LOD_STEPS[LOD_LEVELS] = {1, 2, 4};
+
 void world_init(World *world, int render_distance) {
     if (render_distance < 1) render_distance = 1;
     if (render_distance > MAX_RENDER_DISTANCE) render_distance = MAX_RENDER_DISTANCE;
     world->render_distance     = render_distance;
-    world->capacity            = (2 * MAX_RENDER_DISTANCE + 1) * (2 * MAX_RENDER_DISTANCE + 1);
+    int max_slots = 2 * (MAX_RENDER_DISTANCE + 2) + 1;
+    world->capacity            = max_slots * max_slots;
     world->chunks              = calloc(world->capacity, sizeof(LoadedChunk));
     world->count               = 0;
     ensure_save_dirs();
@@ -235,10 +238,12 @@ static void load_chunk(World *world, int x, int z) {
             world->chunks[i].chunk = malloc(sizeof(Chunk));
             chunk_init(world->chunks[i].chunk, x, z);
             load_chunk_data(world->chunks[i].chunk);
-            world->chunks[i].mesh = malloc(sizeof(Mesh));
-            mesh_init(world->chunks[i].mesh);
-            mesh_generate_greedy(world->chunks[i].mesh, world->chunks[i].chunk);
-            mesh_upload(world->chunks[i].mesh);
+            for (int l = 0; l < LOD_LEVELS; l++) {
+                world->chunks[i].meshes[l] = malloc(sizeof(Mesh));
+                mesh_init(world->chunks[i].meshes[l]);
+                mesh_generate_lod(world->chunks[i].meshes[l], world->chunks[i].chunk, LOD_STEPS[l]);
+                mesh_upload(world->chunks[i].meshes[l]);
+            }
             world->chunks[i].active = true;
             world->chunks[i].dirty = world->chunks[i].save_dirty = false;
             world->count++;
@@ -254,7 +259,7 @@ static void unload_chunk(World *world, int index) {
     if (world->chunks[index].save_dirty) save_chunk_data(&world->chunks[index]);
     LOG_DEBUG(CAT_WORLD, "Unloaded chunk %d,%d",
               world->chunks[index].chunk->x, world->chunks[index].chunk->z);
-    mesh_free(world->chunks[index].mesh); free(world->chunks[index].mesh);
+    for (int l = 0; l < LOD_LEVELS; l++) { mesh_free(world->chunks[index].meshes[l]); free(world->chunks[index].meshes[l]); }
     free(world->chunks[index].chunk);
     world->chunks[index].active = false;
     world->count--;
@@ -285,8 +290,10 @@ void world_update(World *world, vec3 camera_pos) {
 
     for (int i = 0; i < world->capacity; i++) {
         if (world->chunks[i].active && world->chunks[i].dirty) {
-            mesh_generate_greedy(world->chunks[i].mesh, world->chunks[i].chunk);
-            mesh_upload(world->chunks[i].mesh);
+            for (int l = 0; l < LOD_LEVELS; l++) {
+                mesh_generate_lod(world->chunks[i].meshes[l], world->chunks[i].chunk, LOD_STEPS[l]);
+                mesh_upload(world->chunks[i].meshes[l]);
+            }
             world->chunks[i].dirty = false;
         }
     }

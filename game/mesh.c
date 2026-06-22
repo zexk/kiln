@@ -11,13 +11,9 @@ void mesh_init(Mesh *mesh) {
     mesh->ebo             = R_INVALID_HANDLE;
     mesh->indirect_draw_buffer   = R_INVALID_HANDLE;
     mesh->atomic_counter_buffer  = R_INVALID_HANDLE;
-    if (!mesh->vertices) return;
-
-    size_t vbo_size = 16 * 1024 * 1024;
-    mesh->vbo = renderer_create_buffer();
-    renderer_bind_buffer(R_BUF_ARRAY, mesh->vbo);
-    renderer_buffer_data(R_BUF_ARRAY, vbo_size, NULL, R_USAGE_DYNAMIC);
-    renderer_bind_buffer(R_BUF_ARRAY, R_INVALID_HANDLE);
+    /* VBO intentionally left INVALID here so mesh_upload creates it with the
+       right size and memory type.  mesh_prepare_gpu creates its own VBO for
+       the compute path. */
 }
 
 #define EPSILON 0.002f
@@ -41,6 +37,11 @@ static void add_vertex(Mesh *mesh, float x, float y, float z,
         .nx = nx, .ny = ny, .nz = nz, .ao = ao,
         .u = u, .v = v, .texture_layer = tex_layer, .p2 = 0,
     };
+}
+
+static void block_vertex_color(BlockType type, float *r, float *g, float *b) {
+    if (type == BLOCK_WATER) { *r = 0.15f; *g = 0.50f; *b = 1.00f; }
+    else                     { *r = 1.0f;  *g = 1.0f;  *b = 1.0f;  }
 }
 
 static int get_texture_layer(BlockType type, int face) {
@@ -125,12 +126,78 @@ static void add_face(Mesh *mesh, const Chunk *chunk, int x, int y, int z, int fa
         ao[3]=vertex_ao(!is_transparent(chunk,x-1,y,z+1),!is_transparent(chunk,x,y,z+2),!is_transparent(chunk,x-1,y,z+2));
     }
 
-    add_vertex(mesh,p[0][0],p[0][1],p[0][2],1,1,1,nx,ny,nz,ao[0],u0,v0,(float)layer);
-    add_vertex(mesh,p[1][0],p[1][1],p[1][2],1,1,1,nx,ny,nz,ao[1],u1,v0,(float)layer);
-    add_vertex(mesh,p[2][0],p[2][1],p[2][2],1,1,1,nx,ny,nz,ao[2],u1,v1,(float)layer);
-    add_vertex(mesh,p[0][0],p[0][1],p[0][2],1,1,1,nx,ny,nz,ao[0],u0,v0,(float)layer);
-    add_vertex(mesh,p[2][0],p[2][1],p[2][2],1,1,1,nx,ny,nz,ao[2],u1,v1,(float)layer);
-    add_vertex(mesh,p[3][0],p[3][1],p[3][2],1,1,1,nx,ny,nz,ao[3],u0,v1,(float)layer);
+    float cr, cg, cb;
+    block_vertex_color(type, &cr, &cg, &cb);
+    add_vertex(mesh,p[0][0],p[0][1],p[0][2],cr,cg,cb,nx,ny,nz,ao[0],u0,v0,(float)layer);
+    add_vertex(mesh,p[1][0],p[1][1],p[1][2],cr,cg,cb,nx,ny,nz,ao[1],u1,v0,(float)layer);
+    add_vertex(mesh,p[2][0],p[2][1],p[2][2],cr,cg,cb,nx,ny,nz,ao[2],u1,v1,(float)layer);
+    add_vertex(mesh,p[0][0],p[0][1],p[0][2],cr,cg,cb,nx,ny,nz,ao[0],u0,v0,(float)layer);
+    add_vertex(mesh,p[2][0],p[2][1],p[2][2],cr,cg,cb,nx,ny,nz,ao[2],u1,v1,(float)layer);
+    add_vertex(mesh,p[3][0],p[3][1],p[3][2],cr,cg,cb,nx,ny,nz,ao[3],u0,v1,(float)layer);
+}
+
+static BlockType dominant_block(const Chunk *chunk, int x, int y, int z, int step) {
+    for (int dx = 0; dx < step; dx++)
+        for (int dy = 0; dy < step; dy++)
+            for (int dz = 0; dz < step; dz++) {
+                int nx = x + dx, ny = y + dy, nz = z + dz;
+                if (nx >= 0 && nx < CHUNK_SIZE && ny >= 0 && ny < CHUNK_SIZE && nz >= 0 && nz < CHUNK_SIZE)
+                    if (chunk->blocks[nx][ny][nz] != BLOCK_AIR)
+                        return chunk->blocks[nx][ny][nz];
+            }
+    return BLOCK_AIR;
+}
+
+static bool lod_cell_solid(const Chunk *chunk, int x, int y, int z, int step) {
+    return dominant_block(chunk, x, y, z, step) != BLOCK_AIR;
+}
+
+static void add_face_lod(Mesh *mesh, const Chunk *chunk, int x, int y, int z, int face, BlockType type, int step) {
+    float ox = (float)(x + chunk->x * CHUNK_SIZE);
+    float oy = (float)y;
+    float oz = (float)(z + chunk->z * CHUNK_SIZE);
+    float s  = (float)step;
+    int   layer = get_texture_layer(type, face);
+    float pad = 0.001f;
+    float u0 = pad, v0 = pad, u1 = 1.0f - pad, v1 = 1.0f - pad;
+
+    float p[4][3];
+    float nx = 0, ny = 0, nz = 0;
+    if      (face == 0) { nz= 1; p[0][0]=ox;   p[0][1]=oy;   p[0][2]=oz+s; p[1][0]=ox+s; p[1][1]=oy;   p[1][2]=oz+s; p[2][0]=ox+s; p[2][1]=oy+s; p[2][2]=oz+s; p[3][0]=ox;   p[3][1]=oy+s; p[3][2]=oz+s; }
+    else if (face == 1) { nz=-1; p[0][0]=ox+s; p[0][1]=oy;   p[0][2]=oz;   p[1][0]=ox;   p[1][1]=oy;   p[1][2]=oz;   p[2][0]=ox;   p[2][1]=oy+s; p[2][2]=oz;   p[3][0]=ox+s; p[3][1]=oy+s; p[3][2]=oz; }
+    else if (face == 2) { nx=-1; p[0][0]=ox;   p[0][1]=oy;   p[0][2]=oz;   p[1][0]=ox;   p[1][1]=oy;   p[1][2]=oz+s; p[2][0]=ox;   p[2][1]=oy+s; p[2][2]=oz+s; p[3][0]=ox;   p[3][1]=oy+s; p[3][2]=oz; }
+    else if (face == 3) { nx= 1; p[0][0]=ox+s; p[0][1]=oy;   p[0][2]=oz+s; p[1][0]=ox+s; p[1][1]=oy;   p[1][2]=oz;   p[2][0]=ox+s; p[2][1]=oy+s; p[2][2]=oz;   p[3][0]=ox+s; p[3][1]=oy+s; p[3][2]=oz+s; }
+    else if (face == 4) { ny= 1; p[0][0]=ox;   p[0][1]=oy+s; p[0][2]=oz+s; p[1][0]=ox+s; p[1][1]=oy+s; p[1][2]=oz+s; p[2][0]=ox+s; p[2][1]=oy+s; p[2][2]=oz;   p[3][0]=ox;   p[3][1]=oy+s; p[3][2]=oz; }
+    else                { ny=-1; p[0][0]=ox;   p[0][1]=oy;   p[0][2]=oz;   p[1][0]=ox+s; p[1][1]=oy;   p[1][2]=oz;   p[2][0]=ox+s; p[2][1]=oy;   p[2][2]=oz+s; p[3][0]=ox;   p[3][1]=oy;   p[3][2]=oz+s; }
+
+    float ao = 1.0f;
+    float cr, cg, cb;
+    block_vertex_color(type, &cr, &cg, &cb);
+    add_vertex(mesh, p[0][0],p[0][1],p[0][2], cr,cg,cb, nx,ny,nz, ao, u0,v0, (float)layer);
+    add_vertex(mesh, p[1][0],p[1][1],p[1][2], cr,cg,cb, nx,ny,nz, ao, u1,v0, (float)layer);
+    add_vertex(mesh, p[2][0],p[2][1],p[2][2], cr,cg,cb, nx,ny,nz, ao, u1,v1, (float)layer);
+    add_vertex(mesh, p[0][0],p[0][1],p[0][2], cr,cg,cb, nx,ny,nz, ao, u0,v0, (float)layer);
+    add_vertex(mesh, p[2][0],p[2][1],p[2][2], cr,cg,cb, nx,ny,nz, ao, u1,v1, (float)layer);
+    add_vertex(mesh, p[3][0],p[3][1],p[3][2], cr,cg,cb, nx,ny,nz, ao, u0,v1, (float)layer);
+}
+
+void mesh_generate_lod(Mesh *mesh, const Chunk *chunk, int step) {
+    if (step <= 1) { mesh_generate_greedy(mesh, chunk); return; }
+    mesh->vertex_count = 0;
+    for (int x = 0; x < CHUNK_SIZE; x += step) {
+        for (int y = 0; y < CHUNK_SIZE; y += step) {
+            for (int z = 0; z < CHUNK_SIZE; z += step) {
+                BlockType t = dominant_block(chunk, x, y, z, step);
+                if (t == BLOCK_AIR) continue;
+                if (!lod_cell_solid(chunk, x,      y,      z+step, step)) add_face_lod(mesh, chunk, x, y, z, 0, t, step);
+                if (!lod_cell_solid(chunk, x,      y,      z-step, step)) add_face_lod(mesh, chunk, x, y, z, 1, t, step);
+                if (!lod_cell_solid(chunk, x-step, y,      z,      step)) add_face_lod(mesh, chunk, x, y, z, 2, t, step);
+                if (!lod_cell_solid(chunk, x+step, y,      z,      step)) add_face_lod(mesh, chunk, x, y, z, 3, t, step);
+                if (!lod_cell_solid(chunk, x,      y+step, z,      step)) add_face_lod(mesh, chunk, x, y, z, 4, t, step);
+                if (!lod_cell_solid(chunk, x,      y-step, z,      step)) add_face_lod(mesh, chunk, x, y, z, 5, t, step);
+            }
+        }
+    }
 }
 
 void mesh_generate_gpu(Mesh *mesh, R_Program compute_program, R_Texture voxel_tex, int chunk_x, int chunk_z) {
@@ -181,6 +248,7 @@ static void mesh_setup_attribs(void) {
 }
 
 void mesh_upload(Mesh *mesh) {
+    if (mesh->vertex_count == 0) return; /* nothing to upload; draw caller skips 0-count meshes */
     if (mesh->vao == R_INVALID_HANDLE) mesh->vao = renderer_create_vao();
     if (mesh->vbo == R_INVALID_HANDLE) mesh->vbo = renderer_create_buffer();
     renderer_bind_vao(mesh->vao);

@@ -6,7 +6,7 @@
 
 typedef struct {
     Chunk *chunk;
-    Mesh  *mesh;
+    Mesh  *meshes[LOD_LEVELS];
     bool   active;
     bool   dirty;
     bool   save_dirty;

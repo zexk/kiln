@@ -1,7 +1,10 @@
 #include "systems.h"
 #include "components.h"
-#include "logger.h"
-#include <math.h>
+#include "physics.h"
+
+static bool world_solid_cb(void *ctx, int x, int y, int z) {
+    return world_is_solid((World *)ctx, x, y, z);
+}
 
 void sys_movement(world_t *ecs, World *world, float dt) {
     signature_t sig;
@@ -13,33 +16,27 @@ void sys_movement(world_t *ecs, World *world, float dt) {
         C_Transform *transform = query_get(&it, COMP_TRANSFORM);
         C_Movement  *movement  = query_get(&it, COMP_MOVEMENT);
 
-        movement->velocity.y -= GRAVITY * dt;
-        transform->position.y += movement->velocity.y * dt;
+        phys_body_t body = {
+            .position = transform->position,
+            .velocity = movement->velocity,
+            .half_w   = PLAYER_HALF_WIDTH,
+            .foot_off = PLAYER_EYES_HEIGHT,
+            .head_off = PLAYER_HEIGHT - PLAYER_EYES_HEIGHT,
+            .gravity  = GRAVITY,
+            .grounded = movement->grounded,
+        };
 
-        if (movement->velocity.y < 0) {
-            float feet_y   = transform->position.y - PLAYER_EYES_HEIGHT;
-            int   feet_cell = (int)floorf(feet_y);
-            float hw        = PLAYER_HALF_WIDTH;
-            if (world_is_solid(world, (int)floorf(transform->position.x - hw), feet_cell, (int)floorf(transform->position.z - hw)) ||
-                world_is_solid(world, (int)floorf(transform->position.x + hw), feet_cell, (int)floorf(transform->position.z - hw)) ||
-                world_is_solid(world, (int)floorf(transform->position.x - hw), feet_cell, (int)floorf(transform->position.z + hw)) ||
-                world_is_solid(world, (int)floorf(transform->position.x + hw), feet_cell, (int)floorf(transform->position.z + hw))) {
-                transform->position.y = (float)(feet_cell + 1) + PLAYER_EYES_HEIGHT;
-                movement->velocity.y  = 0.0f;
-                movement->grounded    = true;
-            } else {
-                movement->grounded = false;
-            }
-        } else {
-            movement->grounded = false;
-        }
+        phys_step(&body, dt, world_solid_cb, world);
 
-        if (transform->position.y < 0) {
-            transform->position.y = 20.0f;
-            transform->position.x = 8.0f;
-            transform->position.z = 8.0f;
-            movement->velocity.y  = 0.0f;
-            movement->grounded    = false;
+        transform->position = body.position;
+        movement->velocity  = body.velocity;
+        movement->grounded  = body.grounded;
+
+        /* Respawn if the entity fell out of the world. */
+        if (transform->position.y < 0.0f) {
+            transform->position = (vec3){8.0f, 20.0f, 8.0f};
+            movement->velocity  = (vec3){0.0f, 0.0f, 0.0f};
+            movement->grounded  = false;
         }
     }
 }

@@ -19,6 +19,7 @@ option(BUILD_TESTING "Build tests" ON)
 enable_testing()
 
 add_subdirectory(src/core)
+add_subdirectory(src/physics)
 add_subdirectory(src/platform)
 add_subdirectory(src/ecs)
 add_subdirectory(src/camera)
@@ -33,6 +34,7 @@ if(BUILD_TESTING)
 endif()
 
 add_subdirectory(game)
+add_subdirectory(demos)
 
 # Install baked assets only: .obj source files are excluded from the shipped
 # tree — only .kmesh binaries (produced by kiln-bake) are installed.

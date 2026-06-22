@@ -48,12 +48,14 @@ target_include_directories(kyub PRIVATE
     ${CMAKE_SOURCE_DIR}/src/render         # renderer.h
     ${CMAKE_SOURCE_DIR}/src/ui             # ui.h
     ${CMAKE_SOURCE_DIR}/src/ecs            # world_t, entity_t, component_id_t
-    ${CMAKE_SOURCE_DIR}/src/camera)        # fps_camera.h
+    ${CMAKE_SOURCE_DIR}/src/camera         # fps_camera.h
+    ${CMAKE_SOURCE_DIR}/src/physics)       # physics.h
 
 target_link_libraries(kyub PRIVATE
     kiln_renderer
     kiln_ecs
     kiln_camera
     kiln_platform
+    kiln_physics
     kiln_core
     kiln_ui)

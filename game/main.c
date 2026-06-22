@@ -25,9 +25,11 @@
 #define RAYCAST_MAX_DISTANCE 8.0f
 #define RAYCAST_STEP        0.05f
 #define COOLDOWN_TIME       0.25f
-#define FOV_DEGREES         45.0f
+#define FOV_DEFAULT         45.0f
 #define NEAR_PLANE          0.1f
-#define FAR_PLANE           100.0f
+#define FAR_PLANE           800.0f
+
+typedef enum { PAUSE_MAIN = 0, PAUSE_OPTIONS } PauseScreen;
 
 /* ── Game-side ui_draw_t: routes to gui.c's renderer.h primitives ─────────── */
 
@@ -111,6 +113,7 @@ int main(void) {
     register_block_type(g_ecs, BLOCK_GRAVEL, "kyub:gravel", "Gravel", true,  true,  1.0f, "assets/textures/gravel.png", NULL, NULL, NULL);
     register_block_type(g_ecs, BLOCK_WOOD,   "kyub:wood",   "Wood",   true,  true,  2.0f, "assets/textures/wood.png",   NULL, NULL, NULL);
     register_block_type(g_ecs, BLOCK_LEAVES, "kyub:leaves", "Leaves", true,  false, 0.5f, "assets/textures/leaves.png", NULL, NULL, NULL);
+    register_block_type(g_ecs, BLOCK_WATER,  "kyub:water",  "Water",  true,  true,  0.0f, "assets/textures/gravel.png", NULL, NULL, NULL);
 
     /* Collect unique texture paths */
     const char *tex_paths[32]; int tex_path_count = 0;
@@ -188,10 +191,21 @@ int main(void) {
     renderer_enable_attrib(0);
     renderer_bind_vao(R_INVALID_HANDLE);
 
-    /* HUD (crosshair) VAO */
+    /* HUD (crosshair) VAO — two thin quads (horizontal + vertical bar), each
+       as 2 triangles = 6 vertices.  The HUD pipeline is TRIANGLE_LIST so we
+       can't use raw line primitives; thin quads give the same visual effect. */
     R_VAO    hud_vao = renderer_create_vao();
     R_Buffer hud_vbo = renderer_create_buffer();
-    float crosshair[] = { -0.015f,0.0f, 0.015f,0.0f,  0.0f,-0.02f, 0.0f,0.02f };
+    float hw = 0.015f, hh = 0.0015f; /* crosshair half-width / half-thickness */
+    float vw = 0.0015f, vh = 0.020f;
+    float crosshair[] = {
+        /* horizontal bar */
+        -hw, -hh,   hw, -hh,   hw,  hh,
+        -hw, -hh,   hw,  hh,  -hw,  hh,
+        /* vertical bar */
+        -vw, -vh,   vw, -vh,   vw,  vh,
+        -vw, -vh,   vw,  vh,  -vw,  vh,
+    };
     renderer_bind_vao(hud_vao);
     renderer_bind_buffer(R_BUF_ARRAY, hud_vbo);
     renderer_buffer_data(R_BUF_ARRAY, sizeof(crosshair), crosshair, R_USAGE_STATIC);
@@ -232,7 +246,7 @@ int main(void) {
     const ui_draw_t game_draw = {game_ui_rect, game_ui_text, &gui};
 
     World world;
-    world_init(&world, 2);
+    world_init(&world, 6);
 
     fps_camera_t camera;
     fps_camera_init(&camera);
@@ -262,8 +276,10 @@ int main(void) {
     LOG_INFO(CAT_PLATFORM, "Spawn at y=%.2f (ground at y=%d)",
              player_transform ? player_transform->position.y : 20.0f, ground_y);
 
-    BlockType selected_block = BLOCK_STONE;
-    int render_distance = world.render_distance;
+    BlockType   selected_block = BLOCK_STONE;
+    int         render_distance = world.render_distance;
+    float       fov_degrees = FOV_DEFAULT;
+    PauseScreen pause_screen = PAUSE_MAIN;
 
     window_set_cursor_mode(win, CURSOR_DISABLED);
 
@@ -297,8 +313,13 @@ int main(void) {
             switch (event.type) {
             case EVENT_KEY_DOWN:
                 if (event.key.keysym == 't' || event.key.code == KEY_ESCAPE) {
-                    paused = !paused;
-                    window_set_cursor_mode(win, paused ? CURSOR_NORMAL : CURSOR_DISABLED);
+                    if (paused && pause_screen == PAUSE_OPTIONS) {
+                        pause_screen = PAUSE_MAIN;
+                    } else {
+                        paused = !paused;
+                        if (!paused) pause_screen = PAUSE_MAIN;
+                        window_set_cursor_mode(win, paused ? CURSOR_NORMAL : CURSOR_DISABLED);
+                    }
                 }
                 if (event.key.keysym == 0xFFC0) /* F3 */ show_debug = !show_debug;
                 break;
@@ -334,26 +355,26 @@ int main(void) {
             fps_camera_rotate(&camera, game_input.mouse_dx, game_input.mouse_dy);
             game_input.mouse_dx = 0; game_input.mouse_dy = 0;
 
-            /* WASD movement with axis-separated collision */
+            /* WASD movement — set velocity; sys_movement integrates + resolves collision */
             C_Transform *ct = entity_get_component(g_ecs, player, COMP_TRANSFORM);
             C_Movement  *cm = entity_get_component(g_ecs, player, COMP_MOVEMENT);
             if (ct && cm) {
-                float vel = cm->speed * (float)dt;
-                if (game_input.keys[0xe1]) vel *= 6.0f; /* Shift */
-                if (vel > 0.3f) vel = 0.3f;
+                float speed = cm->speed;
+                if (game_input.keys[0xe1]) speed *= 6.0f; /* Shift sprint */
                 vec3 right = vec3_normalize(vec3_cross(camera.front, camera.up));
                 vec3 move = {0.0f, 0.0f, 0.0f};
                 if (game_input.keys['w']) move = vec3_add(move, camera.front);
                 if (game_input.keys['s']) move = vec3_sub(move, camera.front);
                 if (game_input.keys['a']) move = vec3_sub(move, right);
                 if (game_input.keys['d']) move = vec3_add(move, right);
-                if (move.x != 0 || move.z != 0) {
+                move.y = 0.0f;
+                if (move.x != 0.0f || move.z != 0.0f) {
                     move = vec3_normalize(move);
-                    float nx = ct->position.x + move.x * vel;
-                    float nz = ct->position.z + move.z * vel;
-                    float ox = ct->position.x, oz = ct->position.z;
-                    if (position_is_safe(&world, (vec3){nx, ct->position.y, oz})) ct->position.x = nx;
-                    if (position_is_safe(&world, (vec3){ox, ct->position.y, nz})) ct->position.z = nz;
+                    cm->velocity.x = move.x * speed;
+                    cm->velocity.z = move.z * speed;
+                } else {
+                    cm->velocity.x = 0.0f;
+                    cm->velocity.z = 0.0f;
                 }
                 if (game_input.keys[' '] && cm->grounded) {
                     cm->velocity.y = JUMP_VELOCITY;
@@ -403,10 +424,10 @@ int main(void) {
         renderer_bind_texture(R_TEX_2D, tex_array);
         renderer_uniform_int(renderer_uniform_location(shader_program, "uTexture"), 0);
         renderer_uniform_vec3(renderer_uniform_location(shader_program, "uFogColor"), 0.53f, 0.81f, 0.92f);
-        renderer_uniform_float(renderer_uniform_location(shader_program, "uFogDensity"), 0.015f);
+        renderer_uniform_float(renderer_uniform_location(shader_program, "uFogDensity"), 0.005f);
 
         float aspect = (win_height > 0) ? (float)win_width / (float)win_height : 1.0f;
-        mat4 projection = mat4_perspective(FOV_DEGREES * PI / 180.0f, aspect, NEAR_PLANE, FAR_PLANE);
+        mat4 projection = mat4_perspective(fov_degrees * PI / 180.0f, aspect, NEAR_PLANE, FAR_PLANE);
         mat4 view       = fps_camera_view(&camera, cam_pos);
 
         Frustum frustum; frustum_extract(&frustum, mat4_mul(projection, view));
@@ -417,14 +438,21 @@ int main(void) {
         renderer_uniform_mat4(view_loc, view.m);
         renderer_uniform_mat4(proj_loc, projection.m);
 
+        int cam_cx = (int)floorf(cam_pos.x / (float)CHUNK_SIZE);
+        int cam_cz = (int)floorf(cam_pos.z / (float)CHUNK_SIZE);
         for (int i = 0; i < world.capacity; i++) {
-            if (world.chunks[i].active &&
-                frustum_intersects_aabb(&frustum, world.chunks[i].chunk->min, world.chunks[i].chunk->max)) {
-                mat4 model = mat4_identity();
-                renderer_uniform_mat4(model_loc, model.m);
-                renderer_bind_vao(world.chunks[i].mesh->vao);
-                renderer_draw_arrays(R_PRIM_TRIANGLES, 0, (int)world.chunks[i].mesh->vertex_count);
-            }
+            if (!world.chunks[i].active) continue;
+            if (!frustum_intersects_aabb(&frustum, world.chunks[i].chunk->min, world.chunks[i].chunk->max)) continue;
+            int dx   = abs(world.chunks[i].chunk->x - cam_cx);
+            int dz   = abs(world.chunks[i].chunk->z - cam_cz);
+            int dist = dx > dz ? dx : dz;
+            int lod  = dist <= 2 ? 0 : dist <= 5 ? 1 : 2;
+            Mesh *m  = world.chunks[i].meshes[lod];
+            if (m->vertex_count == 0) continue;
+            mat4 model = mat4_identity();
+            renderer_uniform_mat4(model_loc, model.m);
+            renderer_bind_vao(m->vao);
+            renderer_draw_arrays(R_PRIM_TRIANGLES, 0, (int)m->vertex_count);
         }
 
         /* Block highlight outline */
@@ -473,7 +501,7 @@ int main(void) {
         renderer_bind_buffer(R_BUF_ARRAY, hud_vbo);
         renderer_uniform_vec3(renderer_uniform_location(hud_program, "uColor"), 0.7f, 0.7f, 0.7f);
         renderer_uniform_float(renderer_uniform_location(hud_program, "uAlpha"), 1.0f);
-        renderer_draw_arrays(R_PRIM_LINES, 0, 4);
+        renderer_draw_arrays(R_PRIM_TRIANGLES, 0, 12);
 
         /* Hotbar */
         int hb_color_loc = renderer_uniform_location(hud_program, "uColor");
@@ -494,27 +522,84 @@ int main(void) {
 
         /* Pause overlay */
         if (paused) {
-            renderer_enable(R_CAP_BLEND);
-            renderer_blend_func(R_BLEND_SRC_ALPHA, R_BLEND_ONE_MINUS_SRC_ALPHA);
-            renderer_disable(R_CAP_DEPTH_TEST);
-            renderer_disable(R_CAP_CULL_FACE);
             renderer_use_program(hud_program);
             renderer_uniform_vec3(renderer_uniform_location(hud_program, "uColor"), 0.0f, 0.0f, 0.0f);
-            renderer_uniform_float(renderer_uniform_location(hud_program, "uAlpha"), 0.3f);
+            renderer_uniform_float(renderer_uniform_location(hud_program, "uAlpha"), 0.45f);
             renderer_bind_vao(overlay_vao);
             renderer_draw_arrays(R_PRIM_TRIANGLES, 0, 3);
             renderer_bind_vao(R_INVALID_HANDLE);
-            gui_write_text(&gui, (float)win_width * 0.5f - 54.0f, (float)win_height * 0.5f - 78.0f,
-                           "Paused", 4.0f, 0.9f, 0.9f, 0.9f);
-            gui_create_button(&gui, (float)win_width * 0.5f - 110.0f, (float)win_height * 0.5f - 20.0f,
-                              220.0f, 44.0f, "quit game", quit_button_callback, &running);
+
+#define BTN_W 240.0f
+#define BTN_H 48.0f
+#define BTN_GAP 14.0f
+            float cx = (float)win_width  * 0.5f;
+            float cy = (float)win_height * 0.5f;
+            float bx = cx - BTN_W * 0.5f;
+
+            if (pause_screen == PAUSE_MAIN) {
+                float total_h = 3.0f * BTN_H + 2.0f * BTN_GAP;
+                float by = cy - total_h * 0.5f;
+
+                float title_scale = 4.0f;
+                float tw = gui_text_width("PAUSED", title_scale);
+                float th = 7.0f * title_scale; /* font height */
+                gui_write_text(&gui, cx - tw * 0.5f, by - th - 18.0f,
+                               "PAUSED", title_scale, 0.95f, 0.95f, 0.95f);
+
+                if (gui_create_button(&gui, bx, by, BTN_W, BTN_H, "resume", NULL, NULL)) {
+                    paused = false;
+                    pause_screen = PAUSE_MAIN;
+                    window_set_cursor_mode(win, CURSOR_DISABLED);
+                }
+                by += BTN_H + BTN_GAP;
+                if (gui_create_button(&gui, bx, by, BTN_W, BTN_H, "options", NULL, NULL))
+                    pause_screen = PAUSE_OPTIONS;
+                by += BTN_H + BTN_GAP;
+                gui_create_button(&gui, bx, by, BTN_W, BTN_H, "quit game",
+                                  quit_button_callback, &running);
+
+            } else { /* PAUSE_OPTIONS */
+                float title_scale = 4.0f;
+                float tw = gui_text_width("OPTIONS", title_scale);
+                float th = 7.0f * title_scale;
+
+                /* Options panel via the debug_ui system */
+                float panel_w = 280.0f;
+                float panel_x = cx - panel_w * 0.5f;
+                float panel_y = cy - 130.0f;
+
+                gui_write_text(&gui, cx - tw * 0.5f, panel_y - th - 12.0f,
+                               "OPTIONS", title_scale, 0.95f, 0.95f, 0.95f);
+
+                ui_input_t ui_in = {
+                    .mouse_x      = game_input.mouse_x,
+                    .mouse_y      = game_input.mouse_y,
+                    .mouse_down   = game_input.mouse_left,
+                    .pointer_valid = true,
+                };
+                ui_begin(&debug_ui, &ui_in, (float)win_width, (float)win_height, &game_draw);
+                ui_panel_begin(&debug_ui, panel_x, panel_y, panel_w);
+                ui_slider_int(&debug_ui, "render dist", &render_distance, 1, 16);
+                ui_slider_float(&debug_ui, "sensitivity",
+                                &camera.sensitivity, 0.0005f, 0.005f);
+                ui_slider_float(&debug_ui, "FOV", &fov_degrees, 30.0f, 110.0f);
+                ui_panel_end(&debug_ui);
+                ui_end(&debug_ui);
+                world.render_distance = render_distance;
+
+                float back_w = 140.0f;
+                if (gui_create_button(&gui, cx - back_w * 0.5f, panel_y + 200.0f,
+                                      back_w, BTN_H, "back", NULL, NULL))
+                    pause_screen = PAUSE_MAIN;
+            }
+#undef BTN_W
+#undef BTN_H
+#undef BTN_GAP
             renderer_use_program(R_INVALID_HANDLE);
-            renderer_enable(R_CAP_DEPTH_TEST);
-            renderer_enable(R_CAP_CULL_FACE);
         }
 
-        /* Debug panel (F3) */
-        if (show_debug) {
+        /* Debug panel (F3) — suppressed while pause menu is open */
+        if (show_debug && !paused) {
             renderer_disable(R_CAP_DEPTH_TEST);
             renderer_enable(R_CAP_BLEND);
             renderer_blend_func(R_BLEND_SRC_ALPHA, R_BLEND_ONE_MINUS_SRC_ALPHA);
@@ -536,7 +621,7 @@ int main(void) {
                     (double)cam_pos.x, (double)cam_pos.y, (double)cam_pos.z);
             ui_progress(&debug_ui, "chunks", (float)active_chunks, (float)world.capacity);
             ui_separator(&debug_ui);
-            ui_slider_int(&debug_ui, "render dist", &render_distance, 1, 8);
+            ui_slider_int(&debug_ui, "render dist", &render_distance, 1, 16);
             ui_panel_end(&debug_ui);
             ui_end(&debug_ui);
 

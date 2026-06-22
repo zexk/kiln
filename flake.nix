@@ -119,7 +119,11 @@
             stb
           ];
           cmakeFlags = [ "-DBUILD_TESTING=OFF" ];
-          postInstall = ''
+          buildPhase = "cmake --build . --target kiln";
+          installPhase = ''
+            mkdir -p $out/bin $out/share/kiln/shaders
+            cp src/app/kiln.exe $out/bin/
+            cp src/render/shaders/*.spv $out/share/kiln/shaders/
             cp ${mingw.windows.mcfgthreads}/bin/libmcfgthread-2.dll $out/bin/
           '';
           doCheck = false;

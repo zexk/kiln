@@ -17,6 +17,5 @@ result-*
 assets/models/*.obj
 assets/models/*.png
 
-# Runtime-generated saves and kyub block textures (bundled in game source)
+# Runtime-generated saves
 saves/
-game/assets/textures/

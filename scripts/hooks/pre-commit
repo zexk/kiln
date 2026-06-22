@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+staged_nix=$(git diff --cached --name-only --diff-filter=d | grep '\.nix$' || true)
+[ -z "$staged_nix" ] && exit 0
+
+echo "[pre-commit] checking nix formatting..."
+nixpkgs-fmt --check $staged_nix
+
+echo "[pre-commit] running statix..."
+statix check .

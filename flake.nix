@@ -141,6 +141,14 @@
           shellHook = ''
             export VK_LAYER_PATH="${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d"
             ${pkgs.bash}/bin/bash scripts/gen_clangd.sh
+            for hook in scripts/hooks/*; do
+              name=$(basename "$hook")
+              target=".git/hooks/$name"
+              if [ ! -f "$target" ] || ! diff -q "$hook" "$target" > /dev/null 2>&1; then
+                cp "$hook" "$target"
+                chmod +x "$target"
+              fi
+            done
             echo "Kiln dev shell"
           '';
         };

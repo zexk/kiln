@@ -44,6 +44,22 @@
           doCheck = true;
         };
 
+        # ── Buffon's Needle demo ─────────────────────────────────────────────
+        packages.buffon = pkgs.stdenv.mkDerivation {
+          pname = "kiln-demo-buffon";
+          version = "0.1.0";
+          src = ./.;
+          nativeBuildInputs = with pkgs; [ gcc ] ++ hostTools;
+          buildInputs = linuxBuildInputs;
+          doCheck = false;
+          cmakeFlags = [ "-DBUILD_TESTING=OFF" ];
+          buildPhase = "cmake --build . --target buffon";
+          installPhase = ''
+            mkdir -p $out/bin
+            cp demos/buffon/buffon $out/bin/
+          '';
+        };
+
         # ── Win32 cross-compiled package (host: Linux, target: x86_64-windows)
         #    Requires pkgs.pkgsCross.mingwW64 to be available.
         #    The Vulkan loader (vulkan-1.dll) is linked at build time via the

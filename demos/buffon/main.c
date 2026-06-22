@@ -27,7 +27,7 @@
 
 #define MAX_NEEDLES    3000
 #define BASE_SPAWN      3       /* needles per sub-step */
-#define FIELD_HALF     15.0f   /* lines from -FIELD_HALF to +FIELD_HALF in Z */
+#define FIELD_HALF     40.0f   /* lines from -FIELD_HALF to +FIELD_HALF in Z */
 #define LINE_SPACING    1.0f
 #define NEEDLE_LEN      1.0f   /* == LINE_SPACING, so P = 2/pi */
 #define NEEDLE_GRAVITY 12.0f

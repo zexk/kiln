@@ -77,81 +77,83 @@
       {
         formatter = pkgs.nixpkgs-fmt;
 
-        # ── Linux native package ─────────────────────────────────────────────
-        packages.default = pkgs.stdenv.mkDerivation {
-          pname = "kiln";
-          version = "0.1.0";
-          src = ./.;
-          nativeBuildInputs = with pkgs; [ gcc ] ++ hostTools;
-          buildInputs = linuxBuildInputs ++ checkInputs;
-          doCheck = true;
-        };
+        packages = {
+          # ── Linux native package ───────────────────────────────────────────
+          default = pkgs.stdenv.mkDerivation {
+            pname = "kiln";
+            version = "0.1.0";
+            src = ./.;
+            nativeBuildInputs = with pkgs; [ gcc ] ++ hostTools;
+            buildInputs = linuxBuildInputs ++ checkInputs;
+            doCheck = true;
+          };
 
-        # ── Buffon's Needle demo ─────────────────────────────────────────────
-        packages.buffon = pkgs.stdenv.mkDerivation {
-          pname = "kiln-demo-buffon";
-          version = "0.1.0";
-          meta.mainProgram = "buffon";
-          src = ./.;
-          nativeBuildInputs = with pkgs; [ gcc ] ++ hostTools;
-          buildInputs = linuxBuildInputs;
-          doCheck = false;
-          cmakeFlags = [ "-DBUILD_TESTING=OFF" ];
-          buildPhase = "cmake --build . --target buffon";
-          installPhase = ''
-            mkdir -p $out/bin $out/share/kiln/shaders
-            cp demos/buffon/buffon $out/bin/
-            cp src/render/shaders/*.spv $out/share/kiln/shaders/
-          '';
-        };
+          # ── Buffon's Needle demo ───────────────────────────────────────────
+          buffon = pkgs.stdenv.mkDerivation {
+            pname = "kiln-demo-buffon";
+            version = "0.1.0";
+            meta.mainProgram = "buffon";
+            src = ./.;
+            nativeBuildInputs = with pkgs; [ gcc ] ++ hostTools;
+            buildInputs = linuxBuildInputs;
+            doCheck = false;
+            cmakeFlags = [ "-DBUILD_TESTING=OFF" ];
+            buildPhase = "cmake --build . --target buffon";
+            installPhase = ''
+              mkdir -p $out/bin $out/share/kiln/shaders
+              cp demos/buffon/buffon $out/bin/
+              cp src/render/shaders/*.spv $out/share/kiln/shaders/
+            '';
+          };
 
-        # ── Win32 cross-compiled demos ───────────────────────────────────────
-        packages.buffon-win32 = mingw.stdenv.mkDerivation {
-          pname = "kiln-demo-buffon-win32";
-          version = "0.1.0";
-          meta.mainProgram = "buffon";
-          src = ./.;
-          nativeBuildInputs = hostTools ++ [ pkgs.gcc ];
-          buildInputs = with mingw; [
-            vulkan-headers
-            vulkan-loader
-            windows.pthreads
-            windows.mcfgthreads
-            stb
-          ];
-          cmakeFlags = [ "-DBUILD_TESTING=OFF" ];
-          buildPhase = "cmake --build . --target buffon";
-          installPhase = ''
-            mkdir -p $out/bin $out/share/kiln/shaders
-            cp demos/buffon/buffon.exe $out/bin/
-            cp src/render/shaders/*.spv $out/share/kiln/shaders/
-            cp ${mingw.windows.mcfgthreads}/bin/libmcfgthread-2.dll $out/bin/
-          '';
-          doCheck = false;
-        };
+          # ── Win32 cross-compiled demos ─────────────────────────────────────
+          buffon-win32 = mingw.stdenv.mkDerivation {
+            pname = "kiln-demo-buffon-win32";
+            version = "0.1.0";
+            meta.mainProgram = "buffon";
+            src = ./.;
+            nativeBuildInputs = hostTools ++ [ pkgs.gcc ];
+            buildInputs = with mingw; [
+              vulkan-headers
+              vulkan-loader
+              windows.pthreads
+              windows.mcfgthreads
+              stb
+            ];
+            cmakeFlags = [ "-DBUILD_TESTING=OFF" ];
+            buildPhase = "cmake --build . --target buffon";
+            installPhase = ''
+              mkdir -p $out/bin $out/share/kiln/shaders
+              cp demos/buffon/buffon.exe $out/bin/
+              cp src/render/shaders/*.spv $out/share/kiln/shaders/
+              cp ${mingw.windows.mcfgthreads}/bin/libmcfgthread-2.dll $out/bin/
+            '';
+            doCheck = false;
+          };
 
-        # ── Win32 cross-compiled package ─────────────────────────────────────
-        packages.win32 = mingw.stdenv.mkDerivation {
-          pname = "kiln-win32";
-          version = "0.1.0";
-          src = ./.;
-          nativeBuildInputs = hostTools ++ [ pkgs.gcc ];
-          buildInputs = with mingw; [
-            vulkan-headers
-            vulkan-loader
-            windows.pthreads
-            windows.mcfgthreads
-            stb
-          ];
-          cmakeFlags = [ "-DBUILD_TESTING=OFF" ];
-          buildPhase = "cmake --build . --target kiln";
-          installPhase = ''
-            mkdir -p $out/bin $out/share/kiln/shaders
-            cp src/app/kiln.exe $out/bin/
-            cp src/render/shaders/*.spv $out/share/kiln/shaders/
-            cp ${mingw.windows.mcfgthreads}/bin/libmcfgthread-2.dll $out/bin/
-          '';
-          doCheck = false;
+          # ── Win32 cross-compiled package ───────────────────────────────────
+          win32 = mingw.stdenv.mkDerivation {
+            pname = "kiln-win32";
+            version = "0.1.0";
+            src = ./.;
+            nativeBuildInputs = hostTools ++ [ pkgs.gcc ];
+            buildInputs = with mingw; [
+              vulkan-headers
+              vulkan-loader
+              windows.pthreads
+              windows.mcfgthreads
+              stb
+            ];
+            cmakeFlags = [ "-DBUILD_TESTING=OFF" ];
+            buildPhase = "cmake --build . --target kiln";
+            installPhase = ''
+              mkdir -p $out/bin $out/share/kiln/shaders
+              cp src/app/kiln.exe $out/bin/
+              cp src/render/shaders/*.spv $out/share/kiln/shaders/
+              cp ${mingw.windows.mcfgthreads}/bin/libmcfgthread-2.dll $out/bin/
+            '';
+            doCheck = false;
+          };
         };
 
         # ── Dev shell ────────────────────────────────────────────────────────

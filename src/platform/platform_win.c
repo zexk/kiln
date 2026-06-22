@@ -245,8 +245,16 @@ window_t *window_create(const char *title, uint32_t width, uint32_t height) {
     if (!w) return NULL;
 
     w->hinstance = GetModuleHandleA(NULL);
-    w->width     = width;
-    w->height    = height;
+
+    /* Borderless fullscreen at the primary monitor's resolution.
+       Requested width/height are ignored on Win32 — we don't rely on the
+       WM to maximise/tile us because Wine windows are not tiled by external
+       WMs (Wine sets WM_NORMAL_HINTS min=max=created_size, preventing it). */
+    int sw = GetSystemMetrics(SM_CXSCREEN);
+    int sh = GetSystemMetrics(SM_CYSCREEN);
+    w->width  = (uint32_t)sw;
+    w->height = (uint32_t)sh;
+    (void)width; (void)height;
 
     WNDCLASSEXA wc = {0};
     wc.cbSize        = sizeof(wc);
@@ -255,22 +263,17 @@ window_t *window_create(const char *title, uint32_t width, uint32_t height) {
     wc.hInstance     = w->hinstance;
     wc.hCursor       = LoadCursorA(NULL, (LPCSTR)IDC_ARROW);
     wc.lpszClassName = WCLASS;
-    RegisterClassExA(&wc); /* ignore "already registered" error on restart */
-
-    DWORD style = WS_OVERLAPPEDWINDOW;
-    RECT  rect  = { 0, 0, (LONG)width, (LONG)height };
-    AdjustWindowRect(&rect, style, FALSE);
+    RegisterClassExA(&wc);
 
     w->hwnd = CreateWindowExA(
-        0, WCLASS, title, style,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        rect.right - rect.left, rect.bottom - rect.top,
+        WS_EX_APPWINDOW, WCLASS, title, WS_POPUP,
+        0, 0, sw, sh,
         NULL, NULL, w->hinstance,
         w /* passed as lpCreateParams, retrieved in WM_NCCREATE */);
 
     if (!w->hwnd) { free(w); return NULL; }
 
-    ShowWindow(w->hwnd, SW_SHOWMAXIMIZED);
+    ShowWindow(w->hwnd, SW_SHOW);
     UpdateWindow(w->hwnd);
     return w;
 }

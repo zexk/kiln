@@ -126,7 +126,7 @@ int main(void) {
         line_models[i] = mat4_from_trs(
             (vec3_t){0.0f, 0.003f, z},
             quat_identity(),
-            (vec3_t){FIELD_HALF * 2.0f, 0.006f, 0.04f});
+            (vec3_t){FIELD_HALF * 2.5f, 0.006f, 0.04f});
     }
 
     mat4_t ground_model = mat4_from_trs(

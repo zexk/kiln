@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #define LOG_ROTATE_BYTES (10 * 1024 * 1024)
 
@@ -59,16 +62,21 @@ void log_set_level(log_level_t level) { g_level = level; }
 void log_write(log_level_t level, log_category_t cat, const char *fmt, ...) {
     if (level > g_level) return;
 
-    /* timestamp with milliseconds */
+    struct tm tm;
+    int ms;
+#ifdef _WIN32
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    tm.tm_year = st.wYear - 1900; tm.tm_mon  = st.wMonth - 1;
+    tm.tm_mday = st.wDay;         tm.tm_hour = st.wHour;
+    tm.tm_min  = st.wMinute;      tm.tm_sec  = st.wSecond;
+    ms = (int)st.wMilliseconds;
+#else
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
-    struct tm tm;
-#ifdef _WIN32
-    localtime_s(&tm, &ts.tv_sec);
-#else
     localtime_r(&ts.tv_sec, &tm);
+    ms = (int)(ts.tv_nsec / 1000000);
 #endif
-    int ms = (int)(ts.tv_nsec / 1000000);
 
     char tsbuf[32];
     snprintf(tsbuf, sizeof(tsbuf), "%04d-%02d-%02d %02d:%02d:%02d.%03d",

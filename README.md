@@ -1,135 +1,109 @@
 # Kiln
 
-A Vulkan 3D game engine and scene editor written in C99. Kiln is a learning/hobby engine with a clean layered architecture: a low-level render API, an archetype ECS, a small asset pipeline, and a scene editor built on top.
+C99 game engine. Vulkan renderer, archetype ECS, asset pipeline, scene editor. Linux/Win32.
 
-**Kyub** is the bundled voxel game demo that runs on the same engine.
+Kyub (the voxel game built on it) lives at [zexk/kyub](https://github.com/zexk/kyub).
 
----
+## Modules
 
-## Features
+**render** -- Vulkan, dynamic rendering, no render pass objects. HDR offscreen target, bloom (threshold + gaussian + Reinhard), cascaded shadow maps (3 cascades, PCF 3x3), point lights (up to 8, Blinn-Phong), normal mapping, instanced draws, frustum culling, skybox, CPU particles, screenshot readback.
 
-### Renderer (Vulkan, dynamic rendering)
-- HDR offscreen target with **bloom** post-processing (threshold → Gaussian blur → Reinhard composite)
-- **Cascaded shadow maps** — 3 cascades, PCF 3×3, automatic frustum fitting per cascade
-- **Point lights** — up to 8 per frame, quadratic attenuation, Blinn-Phong shading
-- **Normal mapping** — tangents computed at upload time from UV deltas; flat default so untextured meshes are unaffected
-- **Instanced rendering** — `render_mesh_instanced` draws N copies in one GPU call; shadow and colour passes both instanced
-- **Frustum culling** — world-space AABB test per mesh before queueing
-- **Skybox** — cubemap upload, fullscreen-triangle depth≤ pipeline, renders into HDR target
-- **CPU particle system** — gravity + velocity integration, submits via instancing
-- Mipmap generation, anisotropic filtering, wireframe toggle, vsync/FPS-limit control
-- Screenshot readback: `render_save_screenshot("out.ppm")` dumps the HDR color image
+**ecs** -- archetype-based world. `query_iter` / `query_next` / `query_get`.
 
-### ECS
-- Archetype-based world with component queries (`query_iter` / `query_next` / `query_get`)
-- Used by both the editor (`src/ecs/`) and kyub game layer
+**platform** -- window, event loop. X11 and Win32 backends.
 
-### Editor (`src/app/`)
-- Orbit camera + **FPS fly mode** (Tab to toggle, WASD/QE)
-- Spawn entities from prototype templates; pick by ray-cast (AABB broadphase + per-triangle Möller-Trumbore)
-- Transform gizmo: move / rotate / scale
-- Scene save / load (`.kscn` format, palette-encoded block data)
-- Directional light controls (yaw, pitch, intensity, ambient), background colour
-- Debug panel: FPS graph, draw count, camera state, auto-rotate
+**core** -- linalg, AABB, frustum, noise (Perlin + fBm), arena allocator, timer, logging, file I/O.
 
-### Asset pipeline (`src/assets/`)
-- **OBJ loader** with smooth-normal computation
-- **kmesh** — compact binary mesh format (header + packed positions + UVs + indices); `kiln-bake` converts OBJ → kmesh at build time
-- **STB image** for texture loading
+**camera** -- orbit and FPS.
 
-### Kyub (`game/`)
-- Voxel world with greedy meshing, per-face texture arrays, ambient occlusion
-- Chunk loading/unloading, chunk persistence (`.kch` binary format with block palette)
-- Gravity, jumping, block break/place with ray-cast
-- Uses kiln's ECS, FPS camera, UI, noise, and frustum modules
+**ui** -- immediate-mode: panels, sliders, buttons, text, graph strip.
 
----
+**gizmo** -- screen-space translate/rotate/scale gizmo.
+
+**assets** -- OBJ loader, kmesh binary format, STB image, scene serializer (.kscn).
+
+**app** -- scene editor. Orbit/FPS camera, entity spawn from templates, ray-cast pick (AABB + Moller-Trumbore), transform gizmo, scene save/load, light controls, debug panel.
+
+**physics** -- AABB voxel collision.
 
 ## Build
 
-### Nix (recommended)
-
 ```sh
-nix develop          # enters the dev shell with all dependencies
-ninja -C build       # first run: cmake configures automatically via the shell hook
-```
-
-The dev shell provides: `cmake`, `ninja`, `glslc`, `nixd`, `statix`, `deadnix`, `nixfmt`.
-
-### Manual (Linux, X11)
-
-**Dependencies:** Vulkan SDK (headers + loader), X11, glslc (shaderc), stb (header-only)
-
-```sh
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+nix develop
 ninja -C build
 ```
 
-**Windows (cross-compile from NixOS):**
+Or without Nix (Linux, X11, Vulkan SDK required):
 
 ```sh
-nix build .#kiln-win32
+cmake -B build -G Ninja
+ninja -C build
 ```
 
----
-
-## Running
+Cross-compile for Windows from Linux:
 
 ```sh
-# Editor
-./build/src/app/kiln
-
-# Voxel game
-./build/game/kyub
+nix build .#win32
 ```
 
-### Test models
+## Run
 
-The editor loads meshes from `assets/models/`. They are excluded from git to avoid bloating the repo; fetch them with:
+```sh
+./build/src/app/kiln        # scene editor
+```
+
+Test models are not in git. Fetch them:
 
 ```sh
 bash assets/models/fetch.sh
 ```
 
-This downloads a small set of public-domain OBJ meshes from Alec Jacobson's [common-3d-test-models](https://github.com/alecjacobson/common-3d-test-models) repository and bakes them to `.kmesh`.
+Downloads CC0 OBJ meshes from [alecjacobson/common-3d-test-models](https://github.com/alecjacobson/common-3d-test-models) and bakes to .kmesh.
 
----
+## As a library
 
-## Project structure
+Games can pull kiln in as a Nix flake input and use `lib.mkKilnGame`:
+
+```nix
+inputs.kiln.url = "github:zexk/kiln";
+
+packages.default = kiln.lib.mkKilnGame {
+  inherit pkgs;
+  pname = "mygame";
+  src = ./.;
+};
+```
+
+The game's `CMakeLists.txt` receives `-DKILN_DIR` pointing at kiln's store path and links against `kiln_renderer`, `kiln_ecs`, `kiln_core`, etc. For local builds without Nix, set `KILN_DIR` manually or use kiln as a git submodule at `extern/kiln`.
+
+## Structure
 
 ```
 src/
-  core/       linalg, ECS-independent math (aabb, frustum, noise, arena, timer)
-  platform/   window creation, event loop (X11 / Win32)
-  ecs/        archetype ECS (world, archetypes, queries)
-  camera/     orbit camera + FPS camera
-  render/     Vulkan renderer (render.h public API, render_vk.c implementation)
-    shaders/  GLSL sources compiled to SPIR-V at build time
-  ui/         immediate-mode UI (panels, sliders, buttons, graphs)
-  gizmo/      screen-space transform gizmo
-  assets/     OBJ loader, kmesh format, STB image wrapper, scene serialiser
-  app/        scene editor (entry point, ECS setup, input, pick, gizmo wiring)
-  tools/      kiln-bake (OBJ → kmesh batch converter)
-
-game/         Kyub voxel game (uses kiln ECS, camera, UI, noise, frustum)
-tests/        arena, ECS, math unit tests
+  core/       math, noise, AABB, frustum, arena, timer, log, file I/O
+  platform/   X11 / Win32 window and events
+  ecs/        archetype ECS
+  camera/     orbit + FPS camera
+  render/     Vulkan renderer + shaders
+  ui/         immediate-mode UI
+  gizmo/      transform gizmo
+  assets/     OBJ, kmesh, STB image, scene format
+  physics/    AABB voxel collision
+  app/        scene editor (entry point)
+  tools/      kiln-bake (OBJ -> kmesh)
+demos/        standalone demos (Buffon's needle, ...)
+tests/        unit tests (arena, ECS, math)
 assets/
-  models/     .kmesh files (gitignored OBJ sources, fetch with fetch.sh)
+  models/     .kmesh files (gitignored; fetch.sh downloads OBJ sources)
 ```
-
----
 
 ## Environment variables
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `KILN_SHADER_DIR` | `build/src/render/shaders` | Override compiled `.spv` search path |
-| `KILN_ASSET_DIR` | `assets` | Override asset root |
-
----
+| Variable | Purpose |
+|---|---|
+| `KILN_SHADER_DIR` | override compiled .spv search path |
+| `KILN_ASSET_DIR` | override asset root |
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
-Test meshes fetched by `fetch.sh` are from Alec Jacobson's common-3d-test-models collection (public domain / CC0 where applicable).
+MIT. Test meshes from alecjacobson/common-3d-test-models (CC0).

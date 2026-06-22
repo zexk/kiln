@@ -15,9 +15,7 @@ if(NOT WIN32)
     find_package(X11 REQUIRED)
 endif()
 
-option(BUILD_TESTING "Build tests" ON)
-enable_testing()
-
+# Library targets — always built, whether kiln is top-level or a subproject.
 add_subdirectory(src/core)
 add_subdirectory(src/physics)
 add_subdirectory(src/platform)
@@ -27,16 +25,20 @@ add_subdirectory(src/render)
 add_subdirectory(src/ui)
 add_subdirectory(src/gizmo)
 add_subdirectory(src/assets)
-add_subdirectory(src/app)
-add_subdirectory(src/tools)
-if(BUILD_TESTING)
-    add_subdirectory(tests)
+
+# Executables and tests — only when kiln is the top-level project.
+if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+    option(BUILD_TESTING "Build tests" ON)
+    enable_testing()
+    add_subdirectory(src/app)
+    add_subdirectory(src/tools)
+    if(BUILD_TESTING)
+        add_subdirectory(tests)
+    endif()
+    add_subdirectory(demos)
+
+    # Install baked assets only: .obj source files are excluded from the shipped
+    # tree — only .kmesh binaries (produced by kiln-bake) are installed.
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets DESTINATION share/kiln
+            PATTERN "*.obj" EXCLUDE)
 endif()
-
-add_subdirectory(game)
-add_subdirectory(demos)
-
-# Install baked assets only: .obj source files are excluded from the shipped
-# tree — only .kmesh binaries (produced by kiln-bake) are installed.
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets DESTINATION share/kiln
-        PATTERN "*.obj" EXCLUDE)

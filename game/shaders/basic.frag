@@ -22,7 +22,7 @@ void main() {
 
     vec4 texColor = texture(uTexture, TexCoord);
 
-    vec3 lit_color = texColor.rgb * light * AO;
+    vec3 lit_color = texColor.rgb * ourColor * light * AO;
 
     float dist = length(view_pos);
     float fog  = clamp(exp(-dist * pc.uFogDensity), 0.0, 1.0);

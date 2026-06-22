@@ -48,6 +48,7 @@
         packages.buffon = pkgs.stdenv.mkDerivation {
           pname = "kiln-demo-buffon";
           version = "0.1.0";
+          meta.mainProgram = "buffon";
           src = ./.;
           nativeBuildInputs = with pkgs; [ gcc ] ++ hostTools;
           buildInputs = linuxBuildInputs;

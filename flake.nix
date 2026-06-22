@@ -22,15 +22,15 @@
         , version ? "0.1.0"
         , src
         , cmakeTarget ? pname
-        , extraCmakeFlags ? []
-        , extraBuildInputs ? []
+        , extraCmakeFlags ? [ ]
+        , extraBuildInputs ? [ ]
         , installPhase ? ''
             mkdir -p $out/bin $out/share/${pname}/shaders
             cp ${cmakeTarget} $out/bin/
             cp shaders/*.spv $out/share/${pname}/shaders/
             [ -d assets ] && cp -r assets $out/share/${pname}/ || true
           ''
-        , meta ? {}
+        , meta ? { }
         }:
         pkgs.stdenv.mkDerivation {
           inherit pname version src meta installPhase;

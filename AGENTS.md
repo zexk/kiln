@@ -53,6 +53,10 @@ Kiln is a C99 game engine targeting Linux/X11 with a Vulkan renderer. Libraries 
 - `render.h` / `render_vk.c` — high-level scene renderer: uploads meshes/textures/materials as opaque handles, queues draw calls per frame, drives the full pipeline (HDR offscreen, cascaded shadow maps, bloom, skybox, GPU particles). This is what `app/` and demos use.
 - `renderer.h` / `r_*.c` — low-level abstract renderer: thin Vulkan wrappers around programs, buffers, VAOs, and textures (ported from Kyub). Unused by the high-level layer; available for lower-level demos.
 
+**UI** (`src/ui/`): `kiln_ui` (`ui.h`) is a backend-agnostic immediate-mode widget set — the caller supplies a `ui_draw_t` rect/text vtable (the editor routes it through `render.h`). `kiln_ui_gl` (`ui_gl.h`) is the ready-made backend for the low-level renderer: batched screen-space rects, bitmap text (via `kiln_font8x8`) and buttons, plus `ui_gl_draw()` which hands `kiln_ui` a vtable. It ships and compiles its own HUD shaders (located via `$KILN_UI_SHADER_DIR`).
+
+**Texture** (`src/texture/`): `kiln_texture` (`texture.h`) builds layered/array textures from image files — a deduplicating builder (`texture_array_add`/`texture_array_load`) plus a one-shot `texture_array_load_paths`. Decoding goes through `kiln_assets`' `image_load`.
+
 **ECS** (`src/ecs/`): archetype-based. Components are registered at runtime with `component_register`. Entities move between archetypes on add/remove. Query via `query_iter` / `query_next` / `query_get`. The world owns a bump-arena (`src/core/arena.h`) for structural allocations; per-entity data is heap-allocated separately since it must grow.
 
 **Platform** (`src/platform/`): `window_t` is opaque. X11 and Win32 backends share the same `platform.h` API. Native handles (Display/XID or HINSTANCE/HWND) are exposed through `window_get_native_handles` without requiring platform headers.
@@ -61,6 +65,8 @@ Kiln is a C99 game engine targeting Linux/X11 with a Vulkan renderer. Libraries 
 - `.kmesh` — binary mesh format (positions, uvs, uint16/uint32 indices; normals recomputed at load).
 - `.kscn` — text scene format: one entity per line (`name x y z qx qy qz qw sx sy sz`).
 - `kiln-bake` (`src/tools/`) converts OBJ → kmesh. Test models aren't in git; `bash assets/models/fetch.sh` downloads them.
+
+**Physics** (`src/physics/`): `kiln_physics` (`physics.h`) operates against a caller-supplied `phys_solid_fn` voxel query. `phys_step` integrates an AABB body with axis-separated collision; `phys_raycast_voxel` is an Amanatides–Woo DDA returning the first solid voxel hit plus its face normal (for block placement).
 
 **App** (`src/app/`): the scene editor entry point. Links all libraries.
 

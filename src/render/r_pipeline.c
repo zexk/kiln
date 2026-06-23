@@ -108,15 +108,9 @@ void get_pipeline_config(const char *vert_path, const char *frag_path, PipelineC
         cfg->depth_bias_enable  = VK_TRUE;
         cfg->has_texture        = false;
         cfg->push_constant_size = 208;
-    } else if (strstr(vert_path, "ui")) {
-        cfg->vformat            = VERTEX_FORMAT_UI;
-        cfg->depth_test_enable  = VK_FALSE;
-        cfg->depth_write_enable = VK_FALSE;
-        cfg->cull_mode          = VK_CULL_MODE_NONE;
-        cfg->blend_enable       = VK_TRUE;
-        cfg->has_texture        = true;
-        cfg->push_constant_size = 8;
     } else if (strstr(vert_path, "hud")) {
+        /* Checked before "ui": kiln_ui_gl's HUD shaders live under src/ui/, so
+           their paths contain both substrings — the more specific one wins. */
         cfg->vformat            = VERTEX_FORMAT_HUD;
         cfg->topology           = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         cfg->depth_test_enable  = VK_FALSE;
@@ -125,6 +119,14 @@ void get_pipeline_config(const char *vert_path, const char *frag_path, PipelineC
         cfg->blend_enable       = VK_TRUE;
         cfg->has_texture        = false;
         cfg->push_constant_size = 16;
+    } else if (strstr(vert_path, "ui")) {
+        cfg->vformat            = VERTEX_FORMAT_UI;
+        cfg->depth_test_enable  = VK_FALSE;
+        cfg->depth_write_enable = VK_FALSE;
+        cfg->cull_mode          = VK_CULL_MODE_NONE;
+        cfg->blend_enable       = VK_TRUE;
+        cfg->has_texture        = true;
+        cfg->push_constant_size = 8;
     }
 }
 

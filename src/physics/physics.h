@@ -30,3 +30,19 @@ typedef struct {
    grounded.  dt is internally clamped to 1/60 s to prevent tunnelling
    through thin walls on hitch frames. */
 void phys_step(phys_body_t *body, float dt, phys_solid_fn solid, void *ctx);
+
+/* Result of a voxel raycast. */
+typedef struct {
+    bool  hit;
+    int   x, y, z;      /* the solid voxel struck */
+    int   nx, ny, nz;   /* unit face normal pointing back toward the ray; add it
+                           to (x,y,z) for the empty neighbour (block placement) */
+    float distance;     /* world-space distance along the ray to the hit face */
+} phys_raycast_hit_t;
+
+/* March a ray from `origin` along `dir` up to `max_dist` world units with a
+   fast voxel DDA (Amanatides & Woo), returning the first voxel `solid` reports.
+   `dir` need not be normalised.  On a miss the result has hit=false.  If the
+   origin voxel is already solid it is returned immediately with a zero normal. */
+phys_raycast_hit_t phys_raycast_voxel(vec3_t origin, vec3_t dir, float max_dist,
+                                      phys_solid_fn solid, void *ctx);

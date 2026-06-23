@@ -23,8 +23,7 @@ struct window {
 
     bool has_last;
     int  last_x, last_y;
-    bool warp_pending;
-    int  warp_x, warp_y;
+    int  warp_count; /* number of SetCursorPos warps whose WM_MOUSEMOVE is still pending */
     int  restore_x, restore_y; /* screen coords saved on CURSOR_DISABLED enter */
 
     /* Lock-free single-producer / single-consumer ring buffer.
@@ -91,9 +90,7 @@ static void center_cursor(struct window *w) {
     POINT pt = { cx, cy };
     ClientToScreen(w->hwnd, &pt);
     SetCursorPos(pt.x, pt.y);
-    w->warp_pending = true;
-    w->warp_x = cx;
-    w->warp_y = cy;
+    w->warp_count++;
 }
 
 /* -------------------------------------------------------------------------
@@ -166,9 +163,9 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int mx = (int)(short)LOWORD(lp);
         int my = (int)(short)HIWORD(lp);
 
-        /* Swallow our own re-centring warp. */
-        if (w->warp_pending && mx == w->warp_x && my == w->warp_y) {
-            w->warp_pending = false;
+        /* Swallow our own re-centring warps (one suppressed event per warp). */
+        if (w->warp_count > 0) {
+            w->warp_count--;
             w->last_x = mx;
             w->last_y = my;
             w->has_last = true;
@@ -266,13 +263,16 @@ window_t *window_create(const char *title, uint32_t width, uint32_t height) {
     RegisterClassExA(&wc);
 
     w->hwnd = CreateWindowExA(
-        WS_EX_APPWINDOW, WCLASS, title, WS_POPUP,
+        WS_EX_APPWINDOW | WS_EX_TOPMOST, WCLASS, title, WS_POPUP,
         0, 0, sw, sh,
         NULL, NULL, w->hinstance,
         w /* passed as lpCreateParams, retrieved in WM_NCCREATE */);
 
     if (!w->hwnd) { free(w); return NULL; }
 
+    /* Raise to topmost and pin at (0,0) so Wine sets _NET_WM_STATE_ABOVE on
+       the X11 window, causing tiling WMs to float it instead of tiling it. */
+    SetWindowPos(w->hwnd, HWND_TOPMOST, 0, 0, sw, sh, SWP_SHOWWINDOW);
     ShowWindow(w->hwnd, SW_SHOW);
     UpdateWindow(w->hwnd);
     return w;
@@ -343,9 +343,11 @@ void window_set_cursor_mode(window_t *w, cursor_mode_t mode) {
         MapWindowPoints(w->hwnd, NULL, (LPPOINT)&cr, 2);
         ClipCursor(&cr);
 
+        w->warp_count = 0;
         center_cursor(w);
         w->has_last = false;
     } else {
+        w->warp_count = 0;
         ClipCursor(NULL);
         ReleaseCapture();
         if (w->cursor_hidden) { ShowCursor(TRUE); w->cursor_hidden = false; }
@@ -372,9 +374,7 @@ void window_warp_mouse(window_t *w, int x, int y) {
     POINT pt = { x, y };
     ClientToScreen(w->hwnd, &pt);
     SetCursorPos(pt.x, pt.y);
-    w->warp_pending = true;
-    w->warp_x = x;
-    w->warp_y = y;
+    w->warp_count++;
 }
 
 platform_native_handles_t window_get_native_handles(const window_t *w) {

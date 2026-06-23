@@ -842,6 +842,20 @@ static bool create_swapchain(void) {
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g.physical_device, g.surface,
                                               &caps);
     g.extent = choose_extent(&caps);
+#ifdef _WIN32
+    {
+        uint32_t ww, wh;
+        window_size(g.window, &ww, &wh);
+        fprintf(stderr, "[kiln] create_swapchain: window_size=%ux%u  "
+                "caps.currentExtent=%ux%u  caps.min=%ux%u  caps.max=%ux%u  "
+                "using=%ux%u\n",
+                ww, wh,
+                caps.currentExtent.width, caps.currentExtent.height,
+                caps.minImageExtent.width, caps.minImageExtent.height,
+                caps.maxImageExtent.width, caps.maxImageExtent.height,
+                g.extent.width, g.extent.height);
+    }
+#endif
     if (g.extent.width == 0 || g.extent.height == 0) {
         return true; /* minimized; defer */
     }
@@ -868,6 +882,25 @@ static bool create_swapchain(void) {
         want = caps.maxImageCount;
     }
 
+    /* Select compositeAlpha from what the surface actually supports. */
+    VkCompositeAlphaFlagBitsKHR composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    if (!(caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)) {
+        const VkCompositeAlphaFlagBitsKHR fallbacks[] = {
+            VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+            VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
+            VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+        };
+        for (size_t i = 0; i < 3; i++) {
+            if (caps.supportedCompositeAlpha & fallbacks[i]) {
+                composite_alpha = fallbacks[i];
+                fprintf(stderr, "[kiln] OPAQUE compositeAlpha not supported "
+                        "(supported=0x%x); using 0x%x\n",
+                        caps.supportedCompositeAlpha, (unsigned)composite_alpha);
+                break;
+            }
+        }
+    }
+
     VkSwapchainCreateInfoKHR info = {0};
     info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     info.surface = g.surface;
@@ -878,7 +911,7 @@ static bool create_swapchain(void) {
     info.imageArrayLayers = 1;
     info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     info.preTransform = caps.currentTransform;
-    info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    info.compositeAlpha = composite_alpha;
     info.presentMode = g.present_mode;
     info.clipped = VK_TRUE;
 

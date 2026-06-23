@@ -263,18 +263,21 @@ window_t *window_create(const char *title, uint32_t width, uint32_t height) {
     RegisterClassExA(&wc);
 
     w->hwnd = CreateWindowExA(
-        WS_EX_APPWINDOW | WS_EX_TOPMOST, WCLASS, title, WS_POPUP,
+        WS_EX_APPWINDOW, WCLASS, title, WS_POPUP,
         0, 0, sw, sh,
         NULL, NULL, w->hinstance,
         w /* passed as lpCreateParams, retrieved in WM_NCCREATE */);
 
     if (!w->hwnd) { free(w); return NULL; }
 
-    /* Raise to topmost and pin at (0,0) so Wine sets _NET_WM_STATE_ABOVE on
-       the X11 window, causing tiling WMs to float it instead of tiling it. */
-    SetWindowPos(w->hwnd, HWND_TOPMOST, 0, 0, sw, sh, SWP_SHOWWINDOW);
+    /* Show and activate first so the WM grants keyboard focus normally.
+       Then promote to topmost without re-activating, so Wine sets
+       _NET_WM_STATE_FULLSCREEN on the X11 window, signalling tiling WMs
+       to float it at full screen. */
     ShowWindow(w->hwnd, SW_SHOW);
     UpdateWindow(w->hwnd);
+    SetWindowPos(w->hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     return w;
 }
 

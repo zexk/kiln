@@ -338,6 +338,7 @@ void window_set_cursor_mode(window_t *w, cursor_mode_t mode) {
         w->restore_x = pt.x;
         w->restore_y = pt.y;
 
+        SetForegroundWindow(w->hwnd); /* request keyboard focus from the WM */
         if (!w->cursor_hidden) { ShowCursor(FALSE); w->cursor_hidden = true; }
         SetCapture(w->hwnd);
 

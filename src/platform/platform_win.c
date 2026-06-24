@@ -76,10 +76,19 @@ static keycode_t vk_to_code(WPARAM vk) {
     }
 }
 
-/* Normalise VK to a lowercase-ASCII keysym so keys[keysym & 0xFF] matches
-   X11 convention (XK_w=0x77, XK_a=0x61, etc.). */
+/* Normalise VK to a keysym whose low byte matches keys[keysym & 0xFF] on X11.
+   Modifier keys must be mapped explicitly because their VK codes (0x10, 0xA0…)
+   differ from the XK_ low bytes (0xE1, 0xE2…) that main.c uses. */
 static unsigned long vk_to_keysym(WPARAM vk) {
-    return (unsigned long)tolower((unsigned char)(UINT)vk);
+    switch ((UINT)vk) {
+    case VK_SHIFT:    case VK_LSHIFT:   return 0xe1; /* XK_Shift_L   & 0xff */
+    case VK_RSHIFT:                     return 0xe2; /* XK_Shift_R   & 0xff */
+    case VK_CONTROL:  case VK_LCONTROL: return 0xe3; /* XK_Control_L & 0xff */
+    case VK_RCONTROL:                   return 0xe4; /* XK_Control_R & 0xff */
+    case VK_MENU:     case VK_LMENU:    return 0xe9; /* XK_Alt_L     & 0xff */
+    case VK_RMENU:                      return 0xea; /* XK_Alt_R     & 0xff */
+    default: return (unsigned long)tolower((unsigned char)(UINT)vk);
+    }
 }
 
 static void center_cursor(struct window *w) {
@@ -132,6 +141,24 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
         }
         break;
+
+    case WM_KILLFOCUS:
+        /* Under Wine + tiling WMs the WM can revoke X11 keyboard focus right
+           after we set it, leaving mouse capture intact but killing key input.
+           Defer a re-grab so we reclaim focus once the WM settles.  Only fight
+           back in CURSOR_DISABLED (full-screen play) mode. */
+        if (w->cursor_mode == CURSOR_DISABLED)
+            PostMessageA(w->hwnd, WM_USER, 0, 0);
+        return DefWindowProcA(hwnd, msg, wp, lp);
+
+    case WM_USER:
+        /* Deferred focus re-grab posted by WM_KILLFOCUS above. */
+        if (w->cursor_mode == CURSOR_DISABLED) {
+            SetForegroundWindow(w->hwnd);
+            SetActiveWindow(w->hwnd);
+            SetFocus(w->hwnd);
+        }
+        return 0;
 
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:

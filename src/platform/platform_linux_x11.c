@@ -326,6 +326,8 @@ platform_native_handles_t window_get_native_handles(const window_t *w) {
 }
 
 char *platform_resolve_path(const char *path) {
+    if (path && path[0] == '/') return strdup(path); /* absolute — pass through */
+
     char exe[4096];
     ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     if (len <= 0) return strdup(path);

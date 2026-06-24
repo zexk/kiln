@@ -278,6 +278,16 @@ window_t *window_create(const char *title, uint32_t width, uint32_t height) {
     UpdateWindow(w->hwnd);
     SetWindowPos(w->hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+    /* Explicitly take the foreground and keyboard focus. A borderless WS_POPUP
+       promoted to TOPMOST without activation does not receive X11 input focus
+       under Wine, so WM_KEYDOWN/WM_KEYUP never reach WndProc and keyboard input
+       silently does nothing. SetForegroundWindow activates the window at map
+       time (when tiling WMs most readily grant focus); SetActiveWindow +
+       SetFocus direct keyboard input to it. */
+    SetForegroundWindow(w->hwnd);
+    SetActiveWindow(w->hwnd);
+    SetFocus(w->hwnd);
     return w;
 }
 
@@ -339,6 +349,8 @@ void window_set_cursor_mode(window_t *w, cursor_mode_t mode) {
         w->restore_y = pt.y;
 
         SetForegroundWindow(w->hwnd); /* request keyboard focus from the WM */
+        SetActiveWindow(w->hwnd);
+        SetFocus(w->hwnd);
         if (!w->cursor_hidden) { ShowCursor(FALSE); w->cursor_hidden = true; }
         SetCapture(w->hwnd);
 
@@ -393,6 +405,10 @@ platform_native_handles_t window_get_native_handles(const window_t *w) {
    ------------------------------------------------------------------------- */
 
 char *platform_resolve_path(const char *path) {
+    /* Absolute paths (rooted drive letter or UNC) — pass through unchanged. */
+    if (path && (path[0] == '/' || path[0] == '\\' || (path[0] && path[1] == ':')))
+        return strdup(path);
+
     char exe[MAX_PATH];
     DWORD len = GetModuleFileNameA(NULL, exe, MAX_PATH);
     if (len == 0) return strdup(path);

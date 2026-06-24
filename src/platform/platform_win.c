@@ -271,14 +271,15 @@ window_t *window_create(const char *title, uint32_t width, uint32_t height) {
     w->hinstance = GetModuleHandleA(NULL);
 
     /* Borderless fullscreen at the primary monitor's resolution.
-       Requested width/height are ignored on Win32 — we don't rely on the
-       WM to maximise/tile us because Wine windows are not tiled by external
-       WMs (Wine sets WM_NORMAL_HINTS min=max=created_size, preventing it). */
+       Under Wine the X11 display driver may not have initialised yet when
+       GetSystemMetrics is first called, causing SM_CXSCREEN to return 0.
+       Fall back to the caller-supplied size so the window is never 0-wide. */
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);
+    if (sw <= 0) sw = (int)width;
+    if (sh <= 0) sh = (int)height;
     w->width  = (uint32_t)sw;
     w->height = (uint32_t)sh;
-    (void)width; (void)height;
 
     WNDCLASSEXA wc = {0};
     wc.cbSize        = sizeof(wc);
@@ -303,6 +304,18 @@ window_t *window_create(const char *title, uint32_t width, uint32_t height) {
        to float it at full screen. */
     ShowWindow(w->hwnd, SW_SHOW);
     UpdateWindow(w->hwnd);
+
+    /* Pump messages so Wine delivers the real WM_SIZE (and reports the
+       actual X11 screen dimensions) before the caller queries window_size.
+       WM_SIZE updates w->width/w->height, correcting any 0 from above. */
+    {
+        MSG msg;
+        while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+    }
+
     SetWindowPos(w->hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 

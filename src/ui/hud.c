@@ -69,8 +69,8 @@ static bool hud_point_in_rect(const hud_t *g, float x, float y, float w, float h
 bool hud_init(hud_t *g) {
     memset(g, 0, sizeof(*g));
 
-    char *vert = platform_resolve_path("shaders/hud.vert.spv");
-    char *frag = platform_resolve_path("shaders/hud.frag.spv");
+    char *vert = platform_resolve_path("shaders/hud.vert");
+    char *frag = platform_resolve_path("shaders/hud.frag");
     g->program = renderer_create_program(vert, frag);
     free(vert);
     free(frag);

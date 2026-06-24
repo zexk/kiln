@@ -26,6 +26,7 @@ add_subdirectory(src/ui)
 add_subdirectory(src/gizmo)
 add_subdirectory(src/assets)
 add_subdirectory(src/texture)
+add_subdirectory(src/voxel)
 
 # Executables and tests — only when kiln is the top-level project.
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)

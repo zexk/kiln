@@ -4,9 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef KILN_UI_SHADER_DIR
-#define KILN_UI_SHADER_DIR "."
-#endif
+char *platform_resolve_path(const char *path);
 
 #define HUD_FONT_W   5
 #define HUD_FONT_H   8
@@ -71,14 +69,11 @@ static bool hud_point_in_rect(const hud_t *g, float x, float y, float w, float h
 bool hud_init(hud_t *g) {
     memset(g, 0, sizeof(*g));
 
-    const char *dir = getenv("KILN_UI_SHADER_DIR");
-    if (!dir || !dir[0]) dir = KILN_UI_SHADER_DIR;
-
-    char vert[512], frag[512];
-    snprintf(vert, sizeof(vert), "%s/hud.vert", dir);
-    snprintf(frag, sizeof(frag), "%s/hud.frag", dir);
-
+    char *vert = platform_resolve_path("shaders/hud.vert.spv");
+    char *frag = platform_resolve_path("shaders/hud.frag.spv");
     g->program = renderer_create_program(vert, frag);
+    free(vert);
+    free(frag);
     if (g->program == R_INVALID_HANDLE) return false;
 
     g->vao = renderer_create_vao();

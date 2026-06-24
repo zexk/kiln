@@ -15,7 +15,7 @@ foreach(shader hud.vert hud.frag)
 endforeach()
 add_custom_target(kiln_ui_shaders DEPENDS ${ui_spv_files})
 
-add_library(kiln_ui STATIC ui.c ui_gl.c)
+add_library(kiln_ui STATIC ui.c hud.c)
 add_dependencies(kiln_ui kiln_ui_shaders)
 target_include_directories(kiln_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(kiln_ui PRIVATE

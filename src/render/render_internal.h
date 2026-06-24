@@ -75,7 +75,9 @@ typedef struct {
     VkBuffer          *buffers;
     VkDeviceMemory    *buffer_memories;
     uint64_t          *buffer_sizes;
-    uint32_t           buffer_count;
+    uint32_t           buffer_count;     /* high-water mark of slots ever used */
+    uint32_t          *buffer_free;      /* stack of reclaimed buffer slots     */
+    uint32_t           buffer_free_count;
     VkImage           *textures;
     VkDeviceMemory    *texture_memories;
     VkImageView       *texture_views;
@@ -86,7 +88,9 @@ typedef struct {
     uint32_t          *texture_heights;
     uint32_t          *texture_depths;
     VkBuffer          *vaos;
-    uint32_t           vao_count;
+    uint32_t           vao_count;        /* high-water mark of slots ever used */
+    uint32_t          *vao_free;         /* stack of reclaimed VAO slots        */
+    uint32_t           vao_free_count;
     VkBuffer           vao_buffers[MAX_VAO];
     VkBuffer           vao_index_buffers[MAX_VAO];
     VkCullModeFlagBits cull_mode;
@@ -175,6 +179,7 @@ typedef enum {
     VERTEX_FORMAT_OUTLINE,
     VERTEX_FORMAT_HUD,
     VERTEX_FORMAT_UI,
+    VERTEX_FORMAT_ICON,   /* 2D textured icon: vec2 pos, vec2 uv, float layer */
 } VertexFormat;
 
 typedef struct {

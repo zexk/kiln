@@ -18,6 +18,84 @@ R_Texture g_bound_textures[16]     = {R_INVALID_HANDLE};
 VAOState g_vao_state  = {0};
 R_VAO    g_current_vao = R_INVALID_HANDLE;
 
+static char g_screenshot_path[512];
+
+void renderer_save_screenshot(const char *path) {
+    if (!path) { g_screenshot_path[0] = '\0'; return; }
+    strncpy(g_screenshot_path, path, sizeof(g_screenshot_path) - 1);
+    g_screenshot_path[sizeof(g_screenshot_path) - 1] = '\0';
+}
+
+/* Record a copy of the just-rendered swapchain image into a host-visible buffer.
+   Returns the buffer/memory (caller maps + frees after the fence signals), or
+   false if the image can't be captured. Leaves the image in COLOR_ATTACHMENT
+   layout so the existing present path is unaffected. */
+static bool screenshot_record_copy(VkCommandBuffer cmd, VkBuffer *out_buf,
+                                    VkDeviceMemory *out_mem) {
+    VkImage img = g_vk.swap_images[g_vk.image_index];
+    uint32_t w = g_vk.swap_extent.width, h = g_vk.swap_extent.height;
+    VkDeviceSize sz = (VkDeviceSize)w * h * 4;
+
+    VkBuffer buf = create_buffer(sz, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                 out_mem);
+    if (buf == VK_NULL_HANDLE) return false;
+
+    VkImageMemoryBarrier b = {0};
+    b.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    b.image                       = img;
+    b.srcQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+    b.dstQueueFamilyIndex         = VK_QUEUE_FAMILY_IGNORED;
+    b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    b.subresourceRange.levelCount = 1;
+    b.subresourceRange.layerCount = 1;
+    b.oldLayout                   = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    b.newLayout                   = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    b.srcAccessMask               = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    b.dstAccessMask               = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+
+    VkBufferImageCopy bic = {0};
+    bic.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    bic.imageSubresource.layerCount = 1;
+    bic.imageExtent = (VkExtent3D){w, h, 1};
+    vkCmdCopyImageToBuffer(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &bic);
+
+    b.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    b.newLayout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, 1, &b);
+
+    *out_buf = buf;
+    return true;
+}
+
+/* Map the captured buffer and write it out as a binary PPM. swap_format is
+   B8G8R8A8_SRGB, so swap B/R; the sRGB-encoded bytes go straight to the file. */
+static void screenshot_write_ppm(VkDeviceMemory mem) {
+    uint32_t w = g_vk.swap_extent.width, h = g_vk.swap_extent.height;
+    void *mapped;
+    if (vkMapMemory(g_vk.device, mem, 0, (VkDeviceSize)w * h * 4, 0, &mapped) != VK_SUCCESS)
+        return;
+    FILE *f = fopen(g_screenshot_path, "wb");
+    if (f) {
+        fprintf(f, "P6\n%u %u\n255\n", w, h);
+        const uint8_t *px = mapped;
+        for (uint32_t i = 0; i < w * h; i++) {
+            fputc(px[i * 4 + 2], f); /* R (from BGRA) */
+            fputc(px[i * 4 + 1], f); /* G */
+            fputc(px[i * 4 + 0], f); /* B */
+        }
+        fclose(f);
+        fprintf(stderr, "[render] screenshot -> %s\n", g_screenshot_path);
+    }
+    vkUnmapMemory(g_vk.device, mem);
+}
+
 /* ============================================================================
  * Helpers (definitions referenced by all translation units)
  * ============================================================================ */
@@ -338,6 +416,11 @@ void renderer_swap(void) {
 
     vkCmdEndRendering(g_active_cmd);
     g_in_render_pass = false;
+
+    VkBuffer       ss_buf = VK_NULL_HANDLE;
+    VkDeviceMemory ss_mem = VK_NULL_HANDLE;
+    bool ss = g_screenshot_path[0] && screenshot_record_copy(g_active_cmd, &ss_buf, &ss_mem);
+
     vkEndCommandBuffer(g_active_cmd);
 
     VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
@@ -356,6 +439,8 @@ void renderer_swap(void) {
                                  g_vk.in_flight_fences[g_vk.current_frame]);
     if (sub == VK_ERROR_DEVICE_LOST) {
         fprintf(stderr, "VK_ERROR_DEVICE_LOST during submit\n");
+        if (ss) { vkDestroyBuffer(g_vk.device, ss_buf, NULL); vkFreeMemory(g_vk.device, ss_mem, NULL); }
+        g_screenshot_path[0] = '\0';
         recreate_swapchain();
         g_active_cmd    = VK_NULL_HANDLE;
         g_frame_started = false;
@@ -378,6 +463,17 @@ void renderer_swap(void) {
                g_vk.framebuffer_resized) {
         g_vk.framebuffer_resized = false;
         recreate_swapchain();
+    }
+
+    if (ss) {
+        vkWaitForFences(g_vk.device, 1, &g_vk.in_flight_fences[g_vk.current_frame],
+                        VK_TRUE, UINT64_MAX);
+        screenshot_write_ppm(ss_mem);
+        vkDestroyBuffer(g_vk.device, ss_buf, NULL);
+        vkFreeMemory(g_vk.device, ss_mem, NULL);
+        g_screenshot_path[0] = '\0';
+    } else {
+        g_screenshot_path[0] = '\0'; /* clear even if capture couldn't be recorded */
     }
 
     g_vk.current_frame = (g_vk.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;

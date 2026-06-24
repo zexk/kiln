@@ -98,8 +98,15 @@ void get_pipeline_config(const char *vert_path, const char *frag_path, PipelineC
         cfg->cull_mode          = VK_CULL_MODE_NONE;
         cfg->has_texture        = false;
         cfg->push_constant_size = 128;
-    } else if (strstr(vert_path, "basic")) {
+    } else if (strstr(vert_path, "basic") || strstr(vert_path, "voxel")) {
         cfg->cull_mode = VK_CULL_MODE_NONE;
+    } else if (strstr(vert_path, "inv")) {
+        cfg->vformat            = VERTEX_FORMAT_ICON;
+        cfg->depth_test_enable  = VK_FALSE;
+        cfg->depth_write_enable = VK_FALSE;
+        cfg->cull_mode          = VK_CULL_MODE_NONE;
+        cfg->blend_enable       = VK_TRUE;
+        cfg->has_texture        = true;
     } else if (strstr(vert_path, "outline")) {
         cfg->vformat            = VERTEX_FORMAT_OUTLINE;
         cfg->topology           = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
@@ -180,6 +187,13 @@ VkPipeline create_graphics_pipeline(VkShaderModule vert, VkShaderModule frag,
         attrs[0] = (VkVertexInputAttributeDescription){0, 0, VK_FORMAT_R32G32_SFLOAT,   0};
         attrs[1] = (VkVertexInputAttributeDescription){1, 0, VK_FORMAT_R32G32_SFLOAT,   8};
         attrs[2] = (VkVertexInputAttributeDescription){2, 0, VK_FORMAT_R8G8B8A8_UNORM, 16};
+        attr_count = 3;
+        break;
+    case VERTEX_FORMAT_ICON:
+        binding.stride = 20;
+        attrs[0] = (VkVertexInputAttributeDescription){0, 0, VK_FORMAT_R32G32_SFLOAT,  0};
+        attrs[1] = (VkVertexInputAttributeDescription){1, 0, VK_FORMAT_R32G32_SFLOAT,  8};
+        attrs[2] = (VkVertexInputAttributeDescription){2, 0, VK_FORMAT_R32_SFLOAT,    16};
         attr_count = 3;
         break;
     }

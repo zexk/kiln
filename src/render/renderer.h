@@ -6,9 +6,12 @@
 
 #define R_MAX_FRAMES_IN_FLIGHT 2
 #define R_MAX_PIPELINES      16
-#define R_MAX_BUFFERS       256
+/* Buffers/VAOs are pooled with slot reuse (see r_buffer.c). A streaming voxel
+   world keeps thousands of chunk meshes live at once (e.g. render distance 16:
+   ~1369 chunks x 3 LOD meshes), so these must be sized for the live peak. */
+#define R_MAX_BUFFERS      8192
 #define R_MAX_TEXTURES      256
-#define R_MAX_VAO           256
+#define R_MAX_VAO          8192
 #define R_PUSH_CONSTANT_SIZE 256
 #define R_FENCE_TIMEOUT_NS   1000000000ULL
 
@@ -101,6 +104,10 @@ void renderer_shutdown(void);
 void renderer_swap(void);
 void renderer_swap_interval(int interval);
 void renderer_get_size(int *width, int *height);
+
+/* Write the frame presented by the next renderer_swap() to a binary PPM (P6)
+   file at `path`. Intended for visual verification/debugging. */
+void renderer_save_screenshot(const char *path);
 
 void renderer_viewport(int x, int y, int width, int height);
 void renderer_clear(float r, float g, float b, float a);

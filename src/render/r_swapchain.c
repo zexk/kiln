@@ -57,6 +57,9 @@ bool create_swapchain(void) {
     ci.imageExtent      = g_vk.swap_extent;
     ci.imageArrayLayers = 1;
     ci.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    /* TRANSFER_SRC lets renderer_save_screenshot copy the presented image. */
+    if (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
+        ci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ci.preTransform     = caps.currentTransform;
     ci.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;

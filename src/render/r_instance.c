@@ -275,12 +275,16 @@ void init_resource_arrays(void) {
     g_vk.texture_heights  = calloc(MAX_TEXTURES,  sizeof(uint32_t));
     g_vk.texture_depths   = calloc(MAX_TEXTURES,  sizeof(uint32_t));
     g_vk.vaos             = calloc(MAX_VAO,        sizeof(VkBuffer));
+    g_vk.buffer_free      = calloc(MAX_BUFFERS,    sizeof(uint32_t));
+    g_vk.vao_free         = calloc(MAX_VAO,        sizeof(uint32_t));
 
-    g_vk.buffer_count   = 0;
-    g_vk.texture_count  = 0;
-    g_vk.vao_count      = 0;
-    g_vk.pipeline_count = 0;
-    g_vk.active_pipeline = 0;
+    g_vk.buffer_count      = 0;
+    g_vk.buffer_free_count = 0;
+    g_vk.texture_count     = 0;
+    g_vk.vao_count         = 0;
+    g_vk.vao_free_count    = 0;
+    g_vk.pipeline_count    = 0;
+    g_vk.active_pipeline   = 0;
 
     g_vk.bound_vbo          = VK_NULL_HANDLE;
     g_vk.bound_index_buffer = VK_NULL_HANDLE;

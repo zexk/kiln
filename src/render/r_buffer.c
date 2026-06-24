@@ -78,8 +78,10 @@ void copy_to_buffer(VkBuffer dst, VkDeviceSize dst_offset, VkDeviceSize size, co
 
 R_Buffer renderer_create_buffer(void) {
     CHECK_DEVICE_RET(R_INVALID_HANDLE);
-    if (g_vk.buffer_count >= MAX_BUFFERS) return R_INVALID_HANDLE;
-    uint32_t idx = g_vk.buffer_count++;
+    uint32_t idx;
+    if (g_vk.buffer_free_count > 0)        idx = g_vk.buffer_free[--g_vk.buffer_free_count];
+    else if (g_vk.buffer_count < MAX_BUFFERS) idx = g_vk.buffer_count++;
+    else return R_INVALID_HANDLE;
     g_vk.buffers[idx]         = VK_NULL_HANDLE;
     g_vk.buffer_memories[idx] = VK_NULL_HANDLE;
     g_vk.buffer_sizes[idx]    = 0;
@@ -92,8 +94,12 @@ void renderer_destroy_buffer(R_Buffer buffer) {
     if (g_vk.buffers[buffer]) {
         vkDestroyBuffer(g_vk.device, g_vk.buffers[buffer], NULL);
         vkFreeMemory(g_vk.device, g_vk.buffer_memories[buffer], NULL);
-        g_vk.buffers[buffer] = VK_NULL_HANDLE;
+        g_vk.buffers[buffer]         = VK_NULL_HANDLE;
+        g_vk.buffer_memories[buffer] = VK_NULL_HANDLE;
     }
+    g_vk.buffer_sizes[buffer] = 0;
+    /* Reclaim the slot so a streaming world doesn't exhaust the pool. */
+    g_vk.buffer_free[g_vk.buffer_free_count++] = (uint32_t)buffer;
 }
 
 void renderer_bind_buffer(R_BufferTarget target, R_Buffer buffer) {
@@ -202,13 +208,24 @@ void renderer_bind_buffer_base(R_BufferTarget target, int index, R_Buffer buffer
 
 R_VAO renderer_create_vao(void) {
     CHECK_DEVICE_RET(R_INVALID_HANDLE);
-    if (g_vk.vao_count >= MAX_VAO) return R_INVALID_HANDLE;
-    g_vk.vao_buffers[g_vk.vao_count]       = VK_NULL_HANDLE;
-    g_vk.vao_index_buffers[g_vk.vao_count] = VK_NULL_HANDLE;
-    return g_vk.vao_count++;
+    uint32_t idx;
+    if (g_vk.vao_free_count > 0)        idx = g_vk.vao_free[--g_vk.vao_free_count];
+    else if (g_vk.vao_count < MAX_VAO)  idx = g_vk.vao_count++;
+    else return R_INVALID_HANDLE;
+    g_vk.vao_buffers[idx]       = VK_NULL_HANDLE;
+    g_vk.vao_index_buffers[idx] = VK_NULL_HANDLE;
+    return idx;
 }
 
-void renderer_destroy_vao(R_VAO vao) { (void)vao; }
+void renderer_destroy_vao(R_VAO vao) {
+    CHECK_DEVICE();
+    if (vao >= g_vk.vao_count) return;
+    /* VAOs own no GPU objects (they cache buffer handles owned elsewhere);
+       just reclaim the slot so streaming chunk meshes can reuse it. */
+    g_vk.vao_buffers[vao]       = VK_NULL_HANDLE;
+    g_vk.vao_index_buffers[vao] = VK_NULL_HANDLE;
+    g_vk.vao_free[g_vk.vao_free_count++] = (uint32_t)vao;
+}
 
 void renderer_bind_vao(R_VAO vao) {
     if (vao == R_INVALID_HANDLE) {

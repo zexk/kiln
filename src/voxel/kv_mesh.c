@@ -162,7 +162,8 @@ static uint16_t dominant_block(uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHU
 
 static bool lod_solid(uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
                       int x, int y, int z, int step) {
-    return dominant_block(blk,x,y,z,step) != KV_BLOCK_AIR;
+    uint16_t id = dominant_block(blk,x,y,z,step);
+    return id != KV_BLOCK_AIR && kv_block_opaque(id);
 }
 
 static void add_face_lod(KvMesh *m, int face, uint16_t type, float ox, float oy, float oz, float s) {

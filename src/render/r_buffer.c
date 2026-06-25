@@ -235,9 +235,12 @@ void renderer_bind_vao(R_VAO vao) {
         return;
     }
     if (vao >= g_vk.vao_count) return;
-    g_current_vao            = vao;
-    g_vao_state.buffer       = g_vk.vao_buffers[vao];
-    g_vao_state.index_buffer = g_vk.vao_index_buffers[vao];
+    g_current_vao              = vao;
+    g_vao_state.buffer         = g_vk.vao_buffers[vao];
+    g_vao_state.index_buffer   = g_vk.vao_index_buffers[vao];
+    /* Discard stale explicit bind; streaming callers re-set it via renderer_bind_buffer. */
+    g_vk.bound_vbo             = VK_NULL_HANDLE;
+    g_vk.bound_vbo_handle      = R_INVALID_HANDLE;
 }
 
 void renderer_attrib_pointer(int index, int size, R_Type type,

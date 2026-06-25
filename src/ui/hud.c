@@ -167,8 +167,8 @@ bool hud_button(hud_t *g, float x, float y, float w, float h,
 }
 
 static void hud_draw_rect_cb(void *ud, float x, float y, float w, float h,
-                             float r, float g, float b) {
-    hud_rect((hud_t *)ud, x, y, w, h, r, g, b);
+                             float r, float g, float b, float a) {
+    hud_fill_rect((hud_t *)ud, x, y, w, h, r, g, b, a);
 }
 static void hud_draw_text_cb(void *ud, float x, float y, float scale,
                              float r, float g, float b, const char *s) {

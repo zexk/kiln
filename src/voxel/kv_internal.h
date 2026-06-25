@@ -110,6 +110,8 @@ struct kv_world_t {
     void     *gen_ctx;
     char      save_dir[256];
     vec3_t    last_cam;
+    int32_t   last_cam_cx, last_cam_cy, last_cam_cz;
+    bool      has_pending_load;
     R_Program shader;
     int       loc_model, loc_view, loc_proj;
     int       loc_fog_color, loc_fog_density, loc_texture;

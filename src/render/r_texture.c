@@ -214,7 +214,9 @@ void renderer_destroy_texture(R_Texture texture) {
         vkDestroyImageView(g_vk.device, g_vk.texture_views[texture], NULL);
         vkDestroyImage(g_vk.device, g_vk.textures[texture], NULL);
         vkFreeMemory(g_vk.device, g_vk.texture_memories[texture], NULL);
-        g_vk.textures[texture] = VK_NULL_HANDLE;
+        g_vk.texture_views[texture]    = VK_NULL_HANDLE;
+        g_vk.texture_memories[texture] = VK_NULL_HANDLE;
+        g_vk.textures[texture]         = VK_NULL_HANDLE;
     }
     if (g_vk.texture_samplers[texture] != g_vk.default_sampler)
         vkDestroySampler(g_vk.device, g_vk.texture_samplers[texture], NULL);

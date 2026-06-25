@@ -236,15 +236,19 @@ kv_world_t *kv_world_create(int horiz_dist, int vert_radius,
     int hs = 2*(horiz_dist+2)+1;
     int vs = 2*(vert_radius+2)+1;
     kv_world_t *w = calloc(1, sizeof(kv_world_t));
-    w->cap         = hs * hs * vs;
-    w->slots       = calloc(w->cap, sizeof(KvSlot));
-    w->horiz_dist  = horiz_dist;
-    w->vert_radius = vert_radius;
-    w->gen         = gen;
-    w->gen_ctx     = gen_ctx;
-    w->shader      = R_INVALID_HANDLE;
-    w->loc_model   = w->loc_view = w->loc_proj = -1;
-    w->loc_fog_color = w->loc_fog_density = w->loc_texture = -1;
+    w->cap              = hs * hs * vs;
+    w->slots            = calloc(w->cap, sizeof(KvSlot));
+    w->horiz_dist       = horiz_dist;
+    w->vert_radius      = vert_radius;
+    w->gen              = gen;
+    w->gen_ctx          = gen_ctx;
+    w->shader           = R_INVALID_HANDLE;
+    w->loc_model        = w->loc_view = w->loc_proj = -1;
+    w->loc_fog_color    = w->loc_fog_density = w->loc_texture = -1;
+    w->last_cam_cx      = INT32_MIN;
+    w->last_cam_cy      = INT32_MIN;
+    w->last_cam_cz      = INT32_MIN;
+    w->has_pending_load = false;
     strncpy(w->save_dir, save_dir, sizeof(w->save_dir)-1);
     ensure_dirs(save_dir);
     return w;
@@ -256,6 +260,11 @@ void kv_world_destroy(kv_world_t *world) {
     free(world);
 }
 
+/* Max chunks to load per update call during normal streaming.
+   First call with an empty world bypasses this limit so the initial
+   load completes synchronously before spawn-point search runs. */
+#define KV_MAX_LOADS_PER_FRAME 1
+
 void kv_world_update(kv_world_t *world, vec3_t camera_pos) {
     world->last_cam = camera_pos;
     int cam_cx = chunk_coord((int)floorf(camera_pos.x));
@@ -264,18 +273,40 @@ void kv_world_update(kv_world_t *world, vec3_t camera_pos) {
     int ld = world->horiz_dist + 1;
     int lv = world->vert_radius + 1;
 
-    for (int cx=cam_cx-ld; cx<=cam_cx+ld; cx++)
-        for (int cy=cam_cy-lv; cy<=cam_cy+lv; cy++)
-            for (int cz=cam_cz-ld; cz<=cam_cz+ld; cz++)
-                if (!find_slot(world,cx,cy,cz)) add_slot(world,cx,cy,cz);
+    bool cam_moved = (cam_cx != world->last_cam_cx ||
+                      cam_cy != world->last_cam_cy ||
+                      cam_cz != world->last_cam_cz);
 
-    for (int i=0;i<world->cap;i++) {
-        if (!world->slots[i].active) continue;
-        KvChunk *c = world->slots[i].chunk;
-        if (abs(c->cx-cam_cx)>world->horiz_dist+2 ||
-            abs(c->cy-cam_cy)>world->vert_radius+2 ||
-            abs(c->cz-cam_cz)>world->horiz_dist+2)
-            unload_slot(world,i);
+    if (cam_moved || world->has_pending_load) {
+        world->last_cam_cx      = cam_cx;
+        world->last_cam_cy      = cam_cy;
+        world->last_cam_cz      = cam_cz;
+        world->has_pending_load = false;
+
+        /* No limit on first call (world empty): loads all spawn-area chunks. */
+        int limit         = (world->count == 0) ? world->cap : KV_MAX_LOADS_PER_FRAME;
+        int loaded        = 0;
+
+        for (int cx=cam_cx-ld; cx<=cam_cx+ld; cx++)
+            for (int cy=cam_cy-lv; cy<=cam_cy+lv; cy++)
+                for (int cz=cam_cz-ld; cz<=cam_cz+ld; cz++)
+                    if (!find_slot(world,cx,cy,cz)) {
+                        if (loaded < limit) {
+                            add_slot(world,cx,cy,cz);
+                            loaded++;
+                        } else {
+                            world->has_pending_load = true;
+                        }
+                    }
+
+        for (int i=0;i<world->cap;i++) {
+            if (!world->slots[i].active) continue;
+            KvChunk *c = world->slots[i].chunk;
+            if (abs(c->cx-cam_cx)>world->horiz_dist+2 ||
+                abs(c->cy-cam_cy)>world->vert_radius+2 ||
+                abs(c->cz-cam_cz)>world->horiz_dist+2)
+                unload_slot(world,i);
+        }
     }
 
     const int steps[KV_LOD_LEVELS] = LOD_STEPS;

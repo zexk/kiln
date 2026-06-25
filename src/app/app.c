@@ -841,8 +841,8 @@ static void scene_do_load(app_t *app) {
 }
 
 static void app_ui_rect(void *ud, float x, float y, float w, float h,
-                        float r, float g, float b) {
-    (void)ud; render_rect(x, y, w, h, r, g, b);
+                        float r, float g, float b, float a) {
+    (void)ud; (void)a; render_rect(x, y, w, h, r, g, b);
 }
 static void app_ui_text(void *ud, float x, float y, float scale,
                         float r, float g, float b, const char *s) {

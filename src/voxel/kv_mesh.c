@@ -1,6 +1,7 @@
 #include "kv_internal.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #define INITIAL_VERTS 4096
 #define FACE_EPSILON  0.002f
@@ -166,6 +167,55 @@ static bool lod_solid(uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
     return id != KV_BLOCK_AIR && kv_block_opaque(id);
 }
 
+/* Highest non-air block local-y within a step^3 super-block. */
+static int super_top_y(uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
+                       int x, int y, int z, int step) {
+    for (int dy = step-1; dy >= 0; dy--)
+        for (int dx = 0; dx < step; dx++)
+            for (int dz = 0; dz < step; dz++) {
+                int nx=x+dx, ny=y+dy, nz=z+dz;
+                if (nx>=0&&nx<KV_CHUNK_SIZE&&ny>=0&&ny<KV_CHUNK_SIZE&&nz>=0&&nz<KV_CHUNK_SIZE)
+                    if (blk[nx][ny][nz] != KV_BLOCK_AIR) return ny;
+            }
+    return y;
+}
+
+/* Lowest non-air block local-y within a step^3 super-block. */
+static int super_bot_y(uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
+                       int x, int y, int z, int step) {
+    for (int dy = 0; dy < step; dy++)
+        for (int dx = 0; dx < step; dx++)
+            for (int dz = 0; dz < step; dz++) {
+                int nx=x+dx, ny=y+dy, nz=z+dz;
+                if (nx>=0&&nx<KV_CHUNK_SIZE&&ny>=0&&ny<KV_CHUNK_SIZE&&nz>=0&&nz<KV_CHUNK_SIZE)
+                    if (blk[nx][ny][nz] != KV_BLOCK_AIR) return ny;
+            }
+    return y;
+}
+
+/* Side face (face 0-3) with independent y extent [oy_min, oy_max) and xz size s. */
+static void add_side_face_lod(KvMesh *m, int face, uint16_t type,
+                               float ox, float oy_min, float oy_max, float oz, float s) {
+    float p[4][3];
+    float nx=0, ny=0, nz=0;
+    float pad=0.001f, u0=pad, v0=pad, u1=1.0f-pad, v1=1.0f-pad;
+    switch (face) {
+    case 0: nz= 1; p[0][0]=ox;  p[0][1]=oy_min;p[0][2]=oz+s; p[1][0]=ox+s;p[1][1]=oy_min;p[1][2]=oz+s; p[2][0]=ox+s;p[2][1]=oy_max;p[2][2]=oz+s; p[3][0]=ox;  p[3][1]=oy_max;p[3][2]=oz+s; break;
+    case 1: nz=-1; p[0][0]=ox+s;p[0][1]=oy_min;p[0][2]=oz;   p[1][0]=ox;  p[1][1]=oy_min;p[1][2]=oz;   p[2][0]=ox;  p[2][1]=oy_max;p[2][2]=oz;   p[3][0]=ox+s;p[3][1]=oy_max;p[3][2]=oz;   break;
+    case 2: nx=-1; p[0][0]=ox;  p[0][1]=oy_min;p[0][2]=oz;   p[1][0]=ox;  p[1][1]=oy_min;p[1][2]=oz+s; p[2][0]=ox;  p[2][1]=oy_max;p[2][2]=oz+s; p[3][0]=ox;  p[3][1]=oy_max;p[3][2]=oz;   break;
+    default:nx= 1; p[0][0]=ox+s;p[0][1]=oy_min;p[0][2]=oz+s; p[1][0]=ox+s;p[1][1]=oy_min;p[1][2]=oz;   p[2][0]=ox+s;p[2][1]=oy_max;p[2][2]=oz;   p[3][0]=ox+s;p[3][1]=oy_max;p[3][2]=oz+s; break;
+    }
+    float r, g, b;
+    kv_block_tint(type, &r, &g, &b);
+    float layer = (float)kv_tex_layer(type, face);
+    push_vertex(m, p[0][0],p[0][1],p[0][2], r,g,b, nx,ny,nz, 1.0f, u0,v0, layer);
+    push_vertex(m, p[1][0],p[1][1],p[1][2], r,g,b, nx,ny,nz, 1.0f, u1,v0, layer);
+    push_vertex(m, p[2][0],p[2][1],p[2][2], r,g,b, nx,ny,nz, 1.0f, u1,v1, layer);
+    push_vertex(m, p[0][0],p[0][1],p[0][2], r,g,b, nx,ny,nz, 1.0f, u0,v0, layer);
+    push_vertex(m, p[2][0],p[2][1],p[2][2], r,g,b, nx,ny,nz, 1.0f, u1,v1, layer);
+    push_vertex(m, p[3][0],p[3][1],p[3][2], r,g,b, nx,ny,nz, 1.0f, u0,v1, layer);
+}
+
 static void add_face_lod(KvMesh *m, int face, uint16_t type, float ox, float oy, float oz, float s) {
     float p[4][3];
     float nx=0, ny=0, nz=0;
@@ -203,15 +253,21 @@ void kv_mesh_generate_lod(KvMesh *m,
             for (int lz = 0; lz < KV_CHUNK_SIZE; lz += step) {
                 uint16_t t = dominant_block(blk,lx,ly,lz,step);
                 if (t == KV_BLOCK_AIR) continue;
-                float ox = (float)(cx*KV_CHUNK_SIZE + lx);
-                float oy = (float)(cy*KV_CHUNK_SIZE + ly);
-                float oz = (float)(cz*KV_CHUNK_SIZE + lz);
-                if (!lod_solid(blk,lx,  ly,  lz+step,step)) add_face_lod(m,0,t,ox,oy,oz,s);
-                if (!lod_solid(blk,lx,  ly,  lz-step,step)) add_face_lod(m,1,t,ox,oy,oz,s);
-                if (!lod_solid(blk,lx-step,ly,lz,    step)) add_face_lod(m,2,t,ox,oy,oz,s);
-                if (!lod_solid(blk,lx+step,ly,lz,    step)) add_face_lod(m,3,t,ox,oy,oz,s);
-                if (!lod_solid(blk,lx,ly+step,lz,    step)) add_face_lod(m,4,t,ox,oy,oz,s);
-                if (!lod_solid(blk,lx,ly-step,lz,    step)) add_face_lod(m,5,t,ox,oy,oz,s);
+                /* Actual surface bounds within this super-block. */
+                int top_y = super_top_y(blk,lx,ly,lz,step);
+                int bot_y = super_bot_y(blk,lx,ly,lz,step);
+                float ox     = (float)(cx*KV_CHUNK_SIZE + lx);
+                float oy_min = (float)(cy*KV_CHUNK_SIZE + bot_y);
+                float oy_max = (float)(cy*KV_CHUNK_SIZE + top_y + 1);
+                float oz     = (float)(cz*KV_CHUNK_SIZE + lz);
+                /* Top/bottom faces: oy adjusted so oy+s lands at actual surface. */
+                if (!lod_solid(blk,lx,ly+step,lz,step)) add_face_lod(m,4,t,ox,oy_max-s,oz,s);
+                if (!lod_solid(blk,lx,ly-step,lz,step)) add_face_lod(m,5,t,ox,oy_min,  oz,s);
+                /* Side faces: use correct height extent. */
+                if (!lod_solid(blk,lx,  ly,  lz+step,step)) add_side_face_lod(m,0,t,ox,oy_min,oy_max,oz,s);
+                if (!lod_solid(blk,lx,  ly,  lz-step,step)) add_side_face_lod(m,1,t,ox,oy_min,oy_max,oz,s);
+                if (!lod_solid(blk,lx-step,ly,lz,    step)) add_side_face_lod(m,2,t,ox,oy_min,oy_max,oz,s);
+                if (!lod_solid(blk,lx+step,ly,lz,    step)) add_side_face_lod(m,3,t,ox,oy_min,oy_max,oz,s);
             }
         }
     }

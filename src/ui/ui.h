@@ -15,7 +15,7 @@
    `ud` is the userdata pointer stored in ui_draw_t; pass NULL if unused. */
 typedef struct {
     void (*rect)(void *ud, float x, float y, float w, float h,
-                 float r, float g, float b);
+                 float r, float g, float b, float a);
     void (*text)(void *ud, float x, float y, float scale,
                  float r, float g, float b, const char *s);
     void *userdata;

@@ -74,7 +74,7 @@ void ui_panel_begin(ui_t *ui, float x, float y, float w) {
     if (h <= 0.0f) {
         h = UI_ROW; /* first frame: self-corrects next frame */
     }
-    ui->draw.rect(ui->draw.userdata, x, y, w, h, COL_PANEL[0], COL_PANEL[1], COL_PANEL[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, COL_PANEL[0], COL_PANEL[1], COL_PANEL[2], 0.80f);
 
     if (ui->in.pointer_valid &&
         point_in(ui->in.mouse_x, ui->in.mouse_y, x, y, w, h)) {
@@ -141,7 +141,7 @@ bool ui_button(ui_t *ui, const char *label) {
     const float *c = (ui->active_id == id) ? COL_ACTIVE
                      : over                ? COL_HOT
                                            : COL_WIDGET;
-    ui->draw.rect(ui->draw.userdata, x, y, w, h, c[0], c[1], c[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, c[0], c[1], c[2], 1.0f);
     draw_label(ui, x + (w - text_width(label)) * 0.5f, y, h, label);
     return clicked;
 }
@@ -167,11 +167,11 @@ bool ui_checkbox(ui_t *ui, const char *label, bool *value) {
     float bx = x + 2.0f;
     float by = y + 3.0f;
     const float *c = over ? COL_HOT : COL_WIDGET;
-    ui->draw.rect(ui->draw.userdata, bx, by, box, box, c[0], c[1], c[2]);
+    ui->draw.rect(ui->draw.userdata, bx, by, box, box, c[0], c[1], c[2], 1.0f);
     if (*value) {
         float in = 4.0f;
         ui->draw.rect(ui->draw.userdata, bx + in, by + in, box - 2.0f * in, box - 2.0f * in,
-                      COL_CHECK[0], COL_CHECK[1], COL_CHECK[2]);
+                      COL_CHECK[0], COL_CHECK[1], COL_CHECK[2], 1.0f);
     }
     draw_label(ui, bx + box + 8.0f, y, h, label);
     return changed;
@@ -181,7 +181,7 @@ void ui_separator(ui_t *ui) {
     float x = ui->panel_x + UI_PAD;
     float y = ui->cursor_y + 4.0f;
     float w = ui->panel_w - 2.0f * UI_PAD;
-    ui->draw.rect(ui->draw.userdata, x, y, w, 1.0f, 0.35f, 0.35f, 0.40f);
+    ui->draw.rect(ui->draw.userdata, x, y, w, 1.0f, 0.35f, 0.35f, 0.40f, 1.0f);
     ui->cursor_y += 10.0f;
 }
 
@@ -206,8 +206,8 @@ bool ui_slider_float(ui_t *ui, const char *label, float *value, float min,
     float t = (max > min) ? (*value - min) / (max - min) : 0.0f;
     t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
     const float *track = (over || ui->active_id == id) ? COL_HOT : COL_WIDGET;
-    ui->draw.rect(ui->draw.userdata, x, y, w, h, track[0], track[1], track[2]);
-    ui->draw.rect(ui->draw.userdata, x, y, w * t, h, COL_FILL[0], COL_FILL[1], COL_FILL[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, track[0], track[1], track[2], 1.0f);
+    ui->draw.rect(ui->draw.userdata, x, y, w * t, h, COL_FILL[0], COL_FILL[1], COL_FILL[2], 1.0f);
 
     char buf[256];
     snprintf(buf, sizeof(buf), "%s: %.2f", label, (double)*value);
@@ -237,8 +237,8 @@ bool ui_slider_int(ui_t *ui, const char *label, int *value, int min, int max) {
     float t = (max > min) ? (float)(*value - min) / (float)(max - min) : 0.0f;
     t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
     const float *track = (over || ui->active_id == id) ? COL_HOT : COL_WIDGET;
-    ui->draw.rect(ui->draw.userdata, x, y, w, h, track[0], track[1], track[2]);
-    ui->draw.rect(ui->draw.userdata, x, y, w * t, h, COL_FILL[0], COL_FILL[1], COL_FILL[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, track[0], track[1], track[2], 1.0f);
+    ui->draw.rect(ui->draw.userdata, x, y, w * t, h, COL_FILL[0], COL_FILL[1], COL_FILL[2], 1.0f);
 
     char buf[256];
     snprintf(buf, sizeof(buf), "%s: %d", label, *value);
@@ -252,8 +252,8 @@ void ui_progress(ui_t *ui, const char *label, float value, float max) {
 
     float t = (max > 0.0f) ? value / max : 0.0f;
     t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
-    ui->draw.rect(ui->draw.userdata, x, y, w, h, COL_WIDGET[0], COL_WIDGET[1], COL_WIDGET[2]);
-    ui->draw.rect(ui->draw.userdata, x, y, w * t, h, COL_FILL[0], COL_FILL[1], COL_FILL[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, COL_WIDGET[0], COL_WIDGET[1], COL_WIDGET[2], 1.0f);
+    ui->draw.rect(ui->draw.userdata, x, y, w * t, h, COL_FILL[0], COL_FILL[1], COL_FILL[2], 1.0f);
 
     char buf[256];
     snprintf(buf, sizeof(buf), "%s: %.0f/%.0f", label, (double)value, (double)max);
@@ -274,7 +274,7 @@ void ui_graph(ui_t *ui, const char *label,
     ui->cursor_y += gh + UI_GAP;
 
     ui->draw.rect(ui->draw.userdata, x, y, w, gh,
-                  COL_WIDGET[0], COL_WIDGET[1], COL_WIDGET[2]);
+                  COL_WIDGET[0], COL_WIDGET[1], COL_WIDGET[2], 1.0f);
 
     float bw = w / (float)count;
     for (int i = 0; i < count; i++) {
@@ -287,12 +287,12 @@ void ui_graph(ui_t *ui, const char *label,
         float cr = t < 0.5f ? t * 2.0f : 1.0f;
         float cg = t < 0.5f ? 1.0f : 1.0f - (t - 0.5f) * 2.0f;
         ui->draw.rect(ui->draw.userdata,
-                      x + (float)i * bw, y + gh - bh, bw, bh, cr, cg, 0.0f);
+                      x + (float)i * bw, y + gh - bh, bw, bh, cr, cg, 0.0f, 1.0f);
     }
 
     if (target > 0.0f && target < max) {
         float ly = y + gh * (1.0f - target / max);
-        ui->draw.rect(ui->draw.userdata, x, ly, w, 1.0f, 0.55f, 0.55f, 0.60f);
+        ui->draw.rect(ui->draw.userdata, x, ly, w, 1.0f, 0.55f, 0.55f, 0.60f, 1.0f);
     }
 
     float latest = samples[(head + count - 1) % count];
@@ -323,7 +323,7 @@ bool ui_selectable(ui_t *ui, const char *label, bool selected) {
                      : selected                     ? COL_FILL
                      : over                         ? COL_HOT
                                                     : COL_WIDGET;
-    ui->draw.rect(ui->draw.userdata, x, y, w, h, c[0], c[1], c[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, c[0], c[1], c[2], 1.0f);
     draw_label(ui, x + 6.0f, y, h, label);
     return clicked;
 }
@@ -347,7 +347,7 @@ bool ui_drag_float(ui_t *ui, const char *label, float *value, float speed) {
     }
 
     const float *c = (ui->active_id == id) ? COL_ACTIVE : over ? COL_HOT : COL_WIDGET;
-    ui->draw.rect(ui->draw.userdata, x, y, w, h, c[0], c[1], c[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, c[0], c[1], c[2], 1.0f);
     char buf[256];
     snprintf(buf, sizeof(buf), "%s: %.3f", label, (double)*value);
     draw_label(ui, x + 6.0f, y, h, buf);
@@ -365,7 +365,7 @@ bool ui_input_int(ui_t *ui, const char *label, int *value, int step) {
     float px  = x + w - bw;
     float fw  = mx - x;
 
-    ui->draw.rect(ui->draw.userdata, x, y, fw, h, COL_WIDGET[0], COL_WIDGET[1], COL_WIDGET[2]);
+    ui->draw.rect(ui->draw.userdata, x, y, fw, h, COL_WIDGET[0], COL_WIDGET[1], COL_WIDGET[2], 1.0f);
 
     bool over_m = widget_over(ui, mx, y, bw, h);
     if (over_m) ui->hot_id = id_m;
@@ -379,7 +379,7 @@ bool ui_input_int(ui_t *ui, const char *label, int *value, int step) {
         ui->active_id = id_m;
     }
     const float *cm = (ui->active_id == id_m) ? COL_ACTIVE : over_m ? COL_HOT : COL_WIDGET;
-    ui->draw.rect(ui->draw.userdata, mx, y, bw, h, cm[0], cm[1], cm[2]);
+    ui->draw.rect(ui->draw.userdata, mx, y, bw, h, cm[0], cm[1], cm[2], 1.0f);
     draw_label(ui, mx + (bw - UI_GLYPH_W) * 0.5f, y, h, "-");
 
     bool over_p = widget_over(ui, px, y, bw, h);
@@ -393,7 +393,7 @@ bool ui_input_int(ui_t *ui, const char *label, int *value, int step) {
         ui->active_id = id_p;
     }
     const float *cp = (ui->active_id == id_p) ? COL_ACTIVE : over_p ? COL_HOT : COL_WIDGET;
-    ui->draw.rect(ui->draw.userdata, px, y, bw, h, cp[0], cp[1], cp[2]);
+    ui->draw.rect(ui->draw.userdata, px, y, bw, h, cp[0], cp[1], cp[2], 1.0f);
     draw_label(ui, px + (bw - UI_GLYPH_W) * 0.5f, y, h, "+");
 
     char buf[256];

@@ -151,7 +151,7 @@ void kv_mesh_generate(KvMesh *m,
 static uint16_t dominant_block(uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
                                 int x, int y, int z, int step) {
     for (int dx = 0; dx < step; dx++)
-        for (int dy = 0; dy < step; dy++)
+        for (int dy = step-1; dy >= 0; dy--)
             for (int dz = 0; dz < step; dz++) {
                 int nx2 = x+dx, ny2 = y+dy, nz2 = z+dz;
                 if (nx2>=0&&nx2<KV_CHUNK_SIZE&&ny2>=0&&ny2<KV_CHUNK_SIZE&&nz2>=0&&nz2<KV_CHUNK_SIZE)

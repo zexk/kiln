@@ -161,10 +161,21 @@ static uint16_t dominant_block(uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHU
     return KV_BLOCK_AIR;
 }
 
-static bool lod_solid(uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
-                      int x, int y, int z, int step) {
-    uint16_t id = dominant_block(blk,x,y,z,step);
-    return id != KV_BLOCK_AIR && kv_block_opaque(id);
+static bool lod_solid_overlap(uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
+                              int x, int y, int z, int step,
+                              int y_min, int y_max) {
+    for (int dy = 0; dy < step; dy++) {
+        int ny = y + dy;
+        if (ny < y_min || ny > y_max) continue;
+        for (int dx = 0; dx < step; dx++)
+            for (int dz = 0; dz < step; dz++) {
+                int nx = x+dx, nz = z+dz;
+                if (nx>=0&&nx<KV_CHUNK_SIZE&&ny>=0&&ny<KV_CHUNK_SIZE&&nz>=0&&nz<KV_CHUNK_SIZE)
+                    if (blk[nx][ny][nz] != KV_BLOCK_AIR && kv_block_opaque(blk[nx][ny][nz]))
+                        return true;
+            }
+    }
+    return false;
 }
 
 /* Highest non-air block local-y within a step^3 super-block. */
@@ -260,14 +271,14 @@ void kv_mesh_generate_lod(KvMesh *m,
                 float oy_min = (float)(cy*KV_CHUNK_SIZE + bot_y);
                 float oy_max = (float)(cy*KV_CHUNK_SIZE + top_y + 1);
                 float oz     = (float)(cz*KV_CHUNK_SIZE + lz);
-                /* Top/bottom faces: oy adjusted so oy+s lands at actual surface. */
-                if (!lod_solid(blk,lx,ly+step,lz,step)) add_face_lod(m,4,t,ox,oy_max-s,oz,s);
-                if (!lod_solid(blk,lx,ly-step,lz,step)) add_face_lod(m,5,t,ox,oy_min,  oz,s);
-                /* Side faces: use correct height extent. */
-                if (!lod_solid(blk,lx,  ly,  lz+step,step)) add_side_face_lod(m,0,t,ox,oy_min,oy_max,oz,s);
-                if (!lod_solid(blk,lx,  ly,  lz-step,step)) add_side_face_lod(m,1,t,ox,oy_min,oy_max,oz,s);
-                if (!lod_solid(blk,lx-step,ly,lz,    step)) add_side_face_lod(m,2,t,ox,oy_min,oy_max,oz,s);
-                if (!lod_solid(blk,lx+step,ly,lz,    step)) add_side_face_lod(m,3,t,ox,oy_min,oy_max,oz,s);
+                /* Top/bottom faces: check overlap in the face's y-range. */
+                if (!lod_solid_overlap(blk,lx,ly+step,lz,step,top_y+1-step,top_y+1)) add_face_lod(m,4,t,ox,oy_max-s,oz,s);
+                if (!lod_solid_overlap(blk,lx,ly-step,lz,step,bot_y-step,bot_y-1)) add_face_lod(m,5,t,ox,oy_min,  oz,s);
+                /* Side faces: check overlap in [bot_y, top_y] only. */
+                if (!lod_solid_overlap(blk,lx,  ly,  lz+step,step,bot_y,top_y)) add_side_face_lod(m,0,t,ox,oy_min,oy_max,oz,s);
+                if (!lod_solid_overlap(blk,lx,  ly,  lz-step,step,bot_y,top_y)) add_side_face_lod(m,1,t,ox,oy_min,oy_max,oz,s);
+                if (!lod_solid_overlap(blk,lx-step,ly,lz,    step,bot_y,top_y)) add_side_face_lod(m,2,t,ox,oy_min,oy_max,oz,s);
+                if (!lod_solid_overlap(blk,lx+step,ly,lz,    step,bot_y,top_y)) add_side_face_lod(m,3,t,ox,oy_min,oy_max,oz,s);
             }
         }
     }

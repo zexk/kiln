@@ -13,6 +13,7 @@
 #include "kmesh.h"
 #include "scene.h"
 
+#include "settings.h"
 #include "timer.h"
 
 #include <math.h>
@@ -21,6 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+static const char *SETTINGS_PATH = "settings.ini";
 
 /* Where models/textures live, resolved at runtime (env override, else the
    installed share/kiln/assets, else the build-time source dir). */
@@ -181,6 +184,9 @@ static void build_scene(app_t *app) {
 bool app_init(app_t *app) {
     core_init();
 
+    settings_init(&app->settings, NULL, 0);
+    settings_load(&app->settings, SETTINGS_PATH);
+
     app->world = world_create();
     app->transform_id = component_register(app->world, "transform",
                                            sizeof(transform_t),
@@ -189,7 +195,9 @@ bool app_init(app_t *app) {
         component_register(app->world, "renderable", sizeof(renderable_t),
                            _Alignof(renderable_t));
 
-    app->window = window_create("Kiln", 1280, 720);
+    app->window = window_create("Kiln",
+                                app->settings.engine.width,
+                                app->settings.engine.height);
     if (!app->window) {
         return false;
     }
@@ -203,8 +211,9 @@ bool app_init(app_t *app) {
     app->selected = ECS_ENTITY_NULL;
     app->sel_prototype = 0;
     app->spin_speed = 0.6f;
-    app->vsync      = true;
-    app->fps_limit  = 0.0f;
+    app->vsync      = app->settings.engine.vsync;
+    app->fps_limit  = app->settings.engine.fps_limit;
+    render_set_vsync(app->vsync);
     app->bg_color[0] = 0.02f;
     app->bg_color[1] = 0.02f;
     app->bg_color[2] = 0.05f;
@@ -1388,6 +1397,16 @@ void app_shutdown(app_t *app) {
     }
     if (app->particle_emitter != RENDER_GPU_EMITTER_INVALID)
         render_destroy_gpu_emitter(app->particle_emitter);
+
+    /* Persist live graphical state so the next launch picks it up. */
+    uint32_t sw, sh;
+    window_size(app->window, &sw, &sh);
+    app->settings.engine.width     = sw;
+    app->settings.engine.height    = sh;
+    app->settings.engine.vsync     = app->vsync;
+    app->settings.engine.fps_limit = app->fps_limit;
+    settings_save(&app->settings, SETTINGS_PATH);
+
     render_shutdown();
     window_destroy(app->window);
     world_destroy(app->world);

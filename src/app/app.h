@@ -8,6 +8,7 @@
 #include "linalg.h"
 #include "platform.h"
 #include "render.h"
+#include "settings.h"
 #include "ui.h"
 #include "ecs.h"
 
@@ -74,6 +75,8 @@ typedef struct {
 /* Owns the engine subsystems for one running instance. Fields accrete
  * here as subsystems come online, keeping main.c a thin entry point. */
 typedef struct {
+    settings_t settings;
+
     window_t *window;
     world_t *world;
     component_id_t transform_id;

@@ -184,7 +184,16 @@ static void build_scene(app_t *app) {
 bool app_init(app_t *app) {
     core_init();
 
-    settings_init(&app->settings, NULL, 0);
+    static const key_binding_t fly_defaults[] = {
+        {"fly_forward",  KEY_W},
+        {"fly_backward", KEY_S},
+        {"fly_left",     KEY_A},
+        {"fly_right",    KEY_D},
+        {"fly_up",       KEY_E},
+        {"fly_down",     KEY_Q},
+    };
+    settings_init(&app->settings, fly_defaults,
+                  (int)(sizeof(fly_defaults) / sizeof(fly_defaults[0])));
     settings_load(&app->settings, SETTINGS_PATH);
 
     app->world = world_create();
@@ -871,6 +880,7 @@ static void build_ui(app_t *app) {
         /* While orbiting/panning the real cursor is captured and warped, so its
            position is meaningless to the UI — treat it as off-screen. */
         .pointer_valid = !camera_is_navigating(&app->camera),
+        .key_pressed = (int)app->pressed_key,
     };
 
     ui_begin(&app->ui, &in, (float)w, (float)h, &g_kln_ui_draw);
@@ -1006,6 +1016,29 @@ static void build_ui(app_t *app) {
     if (app->scene_status[0]) {
         ui_text(&app->ui, "%s", app->scene_status);
         app->scene_status[0] = '\0';
+    }
+
+    ui_separator(&app->ui);
+
+    /* --- controls (fly key bindings) --- */
+    if (app->fly_mode)
+        ui_text(&app->ui, "CONTROLS  (click to rebind)");
+    else
+        ui_text(&app->ui, "CONTROLS  (enter fly mode first)");
+
+    static const struct { const char *action; const char *label; } FLY_ACTIONS[] = {
+        {"fly_forward",  "forward"},
+        {"fly_backward", "backward"},
+        {"fly_left",     "left"},
+        {"fly_right",    "right"},
+        {"fly_up",       "up"},
+        {"fly_down",     "down"},
+    };
+    for (int i = 0; i < 6; i++) {
+        int k = (int)settings_get_key(&app->settings, FLY_ACTIONS[i].action);
+        if (ui_keybind(&app->ui, FLY_ACTIONS[i].label, &k, key_code_to_name((keycode_t)k))) {
+            settings_set_key(&app->settings, FLY_ACTIONS[i].action, (keycode_t)k);
+        }
     }
 
     ui_panel_end(&app->ui);
@@ -1148,6 +1181,7 @@ void app_run(app_t *app) {
 
     bool running = true;
     while (running) {
+        app->pressed_key = KEY_UNKNOWN;
         event_t event;
         while (window_poll_event(app->window, &event)) {
             if (event.type == EVENT_QUIT ||
@@ -1237,8 +1271,12 @@ void app_run(app_t *app) {
             }
 
             /* Track held keys for fly-mode WASD. */
-            if (event.type == EVENT_KEY_DOWN && event.key.code < KEY_COUNT)
+            if (event.type == EVENT_KEY_DOWN && event.key.code < KEY_COUNT) {
                 app->fly_keys[event.key.code] = true;
+                /* Record for keybind widget — take the first non-modifier key. */
+                if (app->pressed_key == KEY_UNKNOWN)
+                    app->pressed_key = event.key.code;
+            }
             if (event.type == EVENT_KEY_UP && event.key.code < KEY_COUNT)
                 app->fly_keys[event.key.code] = false;
 
@@ -1321,19 +1359,26 @@ void app_run(app_t *app) {
             app->frame_ms_head = (app->frame_ms_head + 1) % APP_FRAME_SAMPLES;
         }
 
-        /* WASD+QE fly movement. */
+        /* WASD+QE fly movement (keys resolved from settings). */
         if (app->fly_mode && dt > 0.0f) {
             const float speed = 5.0f;
             vec3_t right, up_fly;
             fps_camera_basis(&app->fly_cam, &right, &up_fly);
             vec3_t front = app->fly_cam.front;
             float  d = speed * dt;
-            if (app->fly_keys[KEY_W]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(front,  d));
-            if (app->fly_keys[KEY_S]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(front, -d));
-            if (app->fly_keys[KEY_A]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(right, -d));
-            if (app->fly_keys[KEY_D]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(right,  d));
-            if (app->fly_keys[KEY_Q]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(up_fly,-d));
-            if (app->fly_keys[KEY_E]) app->fly_pos = vec3_add(app->fly_pos, vec3_scale(up_fly, d));
+            settings_t *s = &app->settings;
+#define FLY(action, v, scale) \
+    do { keycode_t k = settings_get_key(s, action); \
+         if (k != KEY_UNKNOWN && app->fly_keys[k]) \
+             app->fly_pos = vec3_add(app->fly_pos, vec3_scale(v, scale)); \
+    } while (0)
+            FLY("fly_forward",  front,   d);
+            FLY("fly_backward", front,  -d);
+            FLY("fly_left",     right,  -d);
+            FLY("fly_right",    right,   d);
+            FLY("fly_down",     up_fly, -d);
+            FLY("fly_up",       up_fly,  d);
+#undef FLY
         }
 
         if (app->auto_rotate) {

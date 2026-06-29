@@ -354,6 +354,45 @@ bool ui_drag_float(ui_t *ui, const char *label, float *value, float speed) {
     return changed;
 }
 
+bool ui_keybind(ui_t *ui, const char *label, int *key, const char *key_name) {
+    int id = ++ui->id_counter;
+    float x, y, w, h;
+    next_row(ui, &x, &y, &w, &h);
+
+    bool listening = (ui->keybind_listening == id);
+    bool over = widget_over(ui, x, y, w, h);
+    if (over) ui->hot_id = id;
+
+    bool changed = false;
+    if (listening) {
+        /* Absorb a key press to set the new binding. */
+        if (ui->in.key_pressed != 0) {
+            *key = ui->in.key_pressed;
+            ui->keybind_listening = 0;
+            changed = true;
+        }
+        /* Click anywhere outside to cancel. */
+        if (ui->went_down && !over) {
+            ui->keybind_listening = 0;
+        }
+    } else if (over && ui->went_down) {
+        ui->keybind_listening = id;
+    }
+
+    const float *c = listening   ? COL_ACTIVE
+                     : over      ? COL_HOT
+                                 : COL_WIDGET;
+    ui->draw.rect(ui->draw.userdata, x, y, w, h, c[0], c[1], c[2], 1.0f);
+
+    char buf[128];
+    if (listening)
+        snprintf(buf, sizeof(buf), "%s: [press key...]", label);
+    else
+        snprintf(buf, sizeof(buf), "%s: %s", label, key_name ? key_name : "?");
+    draw_label(ui, x + 6.0f, y, h, buf);
+    return changed;
+}
+
 bool ui_input_int(ui_t *ui, const char *label, int *value, int step) {
     int id_m = ++ui->id_counter;
     int id_p = ++ui->id_counter;

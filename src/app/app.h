@@ -111,6 +111,7 @@ typedef struct {
     vec3_t       fly_pos;
     bool         fly_mode;
     bool         fly_keys[KEY_COUNT]; /* held-key state tracked while in fly mode */
+    keycode_t    pressed_key; /* first key pressed this frame, for ui_keybind */
 
     /* diagnostics + things the UI tampers with */
     float fps;

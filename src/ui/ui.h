@@ -27,6 +27,9 @@ typedef struct {
     bool mouse_down;    /* left button currently held */
     bool pointer_valid; /* false when the cursor is captured/elsewhere — then
                            the UI registers no hover or clicks (see camera) */
+    /* First key pressed this frame; 0 (KEY_UNKNOWN) if none.  Used by
+       ui_keybind to capture the new key while in rebind-listening mode. */
+    int key_pressed;
 } ui_input_t;
 
 #define UI_MAX_PANELS 8
@@ -57,6 +60,10 @@ typedef struct {
        captured when the drag started, kept across frames while active. */
     float drag_ref_x;
     float drag_ref_val;
+
+    /* Persistent state for ui_keybind: id of the widget currently waiting
+       for a key press; 0 means no widget is in rebind-listening mode. */
+    int keybind_listening;
 
     ui_draw_t draw; /* set by ui_begin each frame */
 } ui_t;
@@ -91,6 +98,12 @@ bool ui_selectable(ui_t *ui, const char *label, bool selected);
 /* A numeric drag field: click and drag left/right to change `*value` by
    `speed` units per pixel.  Returns true every frame the value changes. */
 bool ui_drag_float(ui_t *ui, const char *label, float *value, float speed);
+
+/* Key-binding widget: shows "label: key_name". Click to enter rebind mode
+   (shows "label: [press key...]"), then press any key to set *key to the new
+   value.  key_name is typically key_code_to_name(*key) from settings.h.
+   Returns true the frame *key changes. */
+bool ui_keybind(ui_t *ui, const char *label, int *key, const char *key_name);
 
 /* Rolling bar chart of `count` float samples stored in a circular buffer.
    `head` is the index of the next write slot (oldest sample = head % count).

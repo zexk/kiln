@@ -245,6 +245,8 @@ bool app_init(app_t *app) {
     render_set_vsync(app->vsync);
     render_set_bloom(app->bloom, app->bloom_threshold,
                      app->bloom_strength, app->bloom_exposure);
+    app->camera.fov    = kln_radians(app->settings.engine.fov);
+    app->fly_cam.sensitivity = app->settings.engine.mouse_sensitivity;
     app->bg_color[0] = 0.02f;
     app->bg_color[1] = 0.02f;
     app->bg_color[2] = 0.05f;
@@ -967,6 +969,28 @@ static void build_ui(app_t *app) {
             }
         }
 
+        {
+            float prev_fov = kln_degrees(app->camera.fov);
+            float fov_deg  = prev_fov;
+            ui_slider_float(&app->ui, "fov", &fov_deg, 30.0f, 120.0f);
+            if (app->ui.went_up && fov_deg != prev_fov) {
+                app->camera.fov = kln_radians(fov_deg);
+                app->settings.engine.fov = fov_deg;
+                settings_save(&app->settings, app->settings_path);
+            }
+        }
+
+        {
+            float prev_sens = app->fly_cam.sensitivity;
+            ui_slider_float(&app->ui, "mouse sens", &app->fly_cam.sensitivity,
+                            0.0005f, 0.01f);
+            if (app->ui.went_up &&
+                app->fly_cam.sensitivity != prev_sens) {
+                app->settings.engine.mouse_sensitivity = app->fly_cam.sensitivity;
+                settings_save(&app->settings, app->settings_path);
+            }
+        }
+
         bool prev_wire = app->wireframe;
         ui_checkbox(&app->ui, "wireframe", &app->wireframe);
         if (app->wireframe != prev_wire) render_set_wireframe(app->wireframe);
@@ -1535,7 +1559,9 @@ void app_shutdown(app_t *app) {
     app->settings.engine.bloom          = app->bloom;
     app->settings.engine.bloom_threshold = app->bloom_threshold;
     app->settings.engine.bloom_strength  = app->bloom_strength;
-    app->settings.engine.bloom_exposure  = app->bloom_exposure;
+    app->settings.engine.bloom_exposure       = app->bloom_exposure;
+    app->settings.engine.fov                  = kln_degrees(app->camera.fov);
+    app->settings.engine.mouse_sensitivity    = app->fly_cam.sensitivity;
     settings_save(&app->settings, app->settings_path);
 
     render_shutdown();

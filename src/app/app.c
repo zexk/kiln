@@ -8,6 +8,8 @@
 #include "mesh.h"
 #include "obj.h"
 #include "render.h"
+#include "renderer.h"
+#include "hud.h"
 #include "ui.h"
 #include "assets.h"
 #include "kmesh.h"
@@ -16,6 +18,19 @@
 #include "fs.h"
 #include "settings.h"
 #include "timer.h"
+
+/* Thin-renderer HUD for integration testing of the overlay path. */
+static hud_t s_hud;
+static bool  s_hud_ok = false;
+
+static void app_overlay_draw(void *ud) {
+    (void)ud;
+    int w, h;
+    renderer_get_size(&w, &h);
+    hud_begin(&s_hud, w, h, 0, 0, false);
+    /* Small green square in top-left: visible proof the overlay pass fires. */
+    hud_rect(&s_hud, 8.0f, 8.0f, 24.0f, 24.0f, 0.0f, 0.8f, 0.0f);
+}
 
 #include <math.h>
 #include <stdint.h>
@@ -223,6 +238,17 @@ bool app_init(app_t *app) {
     if (!render_init(app->window)) {
         return false;
     }
+
+    {
+        uint32_t w, h;
+        window_size(app->window, &w, &h);
+        if (renderer_init((int)w, (int)h, NULL)) {
+            s_hud_ok = hud_init(&s_hud);
+            if (s_hud_ok)
+                renderer_set_overlay_fn(app_overlay_draw, NULL);
+        }
+    }
+
     assets_init();
 
     ui_init(&app->ui);
@@ -1539,6 +1565,8 @@ void app_shutdown(app_t *app) {
     sync_settings_from_app(app);
     settings_save(&app->settings, app->settings_path);
 
+    if (s_hud_ok) hud_shutdown(&s_hud);
+    renderer_shutdown();
     render_shutdown();
     window_destroy(app->window);
     world_destroy(app->world);

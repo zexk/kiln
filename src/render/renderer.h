@@ -105,6 +105,11 @@ void renderer_swap(void);
 void renderer_swap_interval(int interval);
 void renderer_get_size(int *width, int *height);
 
+/* Register an overlay draw callback invoked each frame from within the rich
+   renderer's frame.  The callback may call renderer_bind_vao, renderer_draw_*,
+   renderer_uniform_*, etc.  Pass fn=NULL to unregister. */
+void renderer_set_overlay_fn(void (*fn)(void *ud), void *ud);
+
 /* Write the frame presented by the next renderer_swap() to a binary PPM (P6)
    file at `path`. Intended for visual verification/debugging. */
 void renderer_save_screenshot(const char *path);

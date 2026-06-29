@@ -47,7 +47,7 @@ if(KILN_RENDERER STREQUAL "vulkan")
         r_texture.c
         r_draw.c)
     target_link_libraries(kiln_renderer PUBLIC
-        kiln_core kiln_platform Vulkan::Vulkan
+        kiln_render kiln_core kiln_platform Vulkan::Vulkan
         $<$<NOT:$<BOOL:${WIN32}>>:X11::X11>)
     target_include_directories(kiln_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

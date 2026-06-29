@@ -434,6 +434,48 @@ static struct {
 } g;
 
 /* ----------------------------------------------------------------------- */
+/* thin-renderer bridge                                                     */
+/* ----------------------------------------------------------------------- */
+
+/* Hook fired each frame after the HDR composite pass, with the swapchain
+   image still in COLOR_ATTACHMENT_OPTIMAL.  The thin renderer registers
+   itself here during renderer_init(); g_active_cmd + swap_extent are set
+   around the call so thin-renderer draw calls record into the right buffer. */
+static void (*g_overlay_fn)(void *ud) = NULL;
+static void  *g_overlay_ud            = NULL;
+
+/* Bridge state valid only for the duration of the overlay hook call. */
+static VkCommandBuffer g_overlay_cmd = VK_NULL_HANDLE;
+static VkExtent2D      g_overlay_ext = {0};
+
+void render_set_overlay_hook(void (*fn)(void *ud), void *ud) {
+    g_overlay_fn = fn;
+    g_overlay_ud = ud;
+}
+
+/* Called by the thin renderer from within its overlay hook to obtain the
+   active command buffer (cast avoids exposing VkCommandBuffer in render.h). */
+void *render_get_overlay_cmd(void) { return g_overlay_cmd; }
+
+void render_get_overlay_extent(uint32_t *w, uint32_t *h) {
+    *w = g_overlay_ext.width;
+    *h = g_overlay_ext.height;
+}
+
+/* Called by renderer_init() to borrow the rich renderer's Vulkan context. */
+void render_vk_get_context(VkInstance *inst, VkPhysicalDevice *phys,
+                            VkDevice *dev, VkQueue *queue,
+                            uint32_t *family, VkFormat *fmt, VkExtent2D *ext) {
+    if (inst)   *inst   = g.instance;
+    if (phys)   *phys   = g.physical_device;
+    if (dev)    *dev    = g.device;
+    if (queue)  *queue  = g.graphics_queue;
+    if (family) *family = g.graphics_family;
+    if (fmt)    *fmt    = g.swapchain_format;
+    if (ext)    *ext    = g.extent;
+}
+
+/* ----------------------------------------------------------------------- */
 /* helpers                                                                  */
 /* ----------------------------------------------------------------------- */
 
@@ -3389,6 +3431,52 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     }
 
     vkCmdEndRendering(cmd);
+
+    /* Thin-renderer overlay pass: voxel 3D + HUD 2D drawn over the composite.
+       The swapchain image stays in COLOR_ATTACHMENT_OPTIMAL across the pass.
+       Depth is reused with a fresh clear so overlay objects sort correctly. */
+    if (g_overlay_fn) {
+        image_barrier(cmd, g.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                      VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
+
+        VkRenderingAttachmentInfo ov_col = {0};
+        ov_col.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        ov_col.imageView   = g.image_views[image_index];
+        ov_col.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ov_col.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+        ov_col.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingAttachmentInfo ov_dep = {0};
+        ov_dep.sType                         = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        ov_dep.imageView                     = g.depth_view;
+        ov_dep.imageLayout                   = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        ov_dep.loadOp                        = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        ov_dep.storeOp                       = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        ov_dep.clearValue.depthStencil.depth = 1.0f;
+
+        VkRenderingInfo ov_ri = {0};
+        ov_ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ov_ri.renderArea.extent    = g.extent;
+        ov_ri.layerCount           = 1;
+        ov_ri.colorAttachmentCount = 1;
+        ov_ri.pColorAttachments    = &ov_col;
+        ov_ri.pDepthAttachment     = &ov_dep;
+        vkCmdBeginRendering(cmd, &ov_ri);
+
+        g_overlay_cmd = cmd;
+        g_overlay_ext = g.extent;
+        g_overlay_fn(g_overlay_ud);
+        g_overlay_cmd = VK_NULL_HANDLE;
+
+        vkCmdEndRendering(cmd);
+    }
 
     image_barrier(cmd, g.images[image_index], VK_IMAGE_ASPECT_COLOR_BIT,
                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,

@@ -130,6 +130,12 @@ void render_set_bloom(bool enabled, float threshold, float strength, float expos
    Blocks only on that one frame; safe to call between render_draw calls. */
 void render_save_screenshot(const char *path);
 
+/* Register a hook called each frame after the HDR composite pass while the
+   swapchain image is still in COLOR_ATTACHMENT_OPTIMAL layout.  The callback
+   records thin-renderer draw calls into the active command buffer obtained via
+   render_get_overlay_cmd().  Pass fn=NULL to unregister. */
+void render_set_overlay_hook(void (*fn)(void *ud), void *ud);
+
 /* GPU particle emitter: particle state lives in device-local SSBOs; a compute
    shader advances physics and writes indirect draw arguments each frame.
    The draw reuses the existing instanced pipeline so lighting and shadows apply.

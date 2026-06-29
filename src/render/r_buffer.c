@@ -1,38 +1,5 @@
 #include "render_internal.h"
 
-VkBuffer create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
-                       VkMemoryPropertyFlags props, VkDeviceMemory *out_memory) {
-    VkBufferCreateInfo ci = {0};
-    ci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    ci.size        = size;
-    ci.usage       = usage;
-    ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VkBuffer buf;
-    if (vkCreateBuffer(g_vk.device, &ci, NULL, &buf) != VK_SUCCESS) {
-        fprintf(stderr, "Failed to create buffer of size %zu\n", (size_t)size);
-        return VK_NULL_HANDLE;
-    }
-
-    VkMemoryRequirements reqs;
-    vkGetBufferMemoryRequirements(g_vk.device, buf, &reqs);
-
-    VkMemoryAllocateInfo ai = {0};
-    ai.sType          = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    ai.allocationSize = reqs.size;
-    uint32_t mt = find_memory_type(reqs.memoryTypeBits, props);
-    if (mt == UINT32_MAX) { vkDestroyBuffer(g_vk.device, buf, NULL); return VK_NULL_HANDLE; }
-    ai.memoryTypeIndex = mt;
-
-    if (vkAllocateMemory(g_vk.device, &ai, NULL, out_memory) != VK_SUCCESS) {
-        fprintf(stderr, "Failed to allocate %zu bytes\n", (size_t)reqs.size);
-        vkDestroyBuffer(g_vk.device, buf, NULL);
-        return VK_NULL_HANDLE;
-    }
-    vkBindBufferMemory(g_vk.device, buf, *out_memory, 0);
-    return buf;
-}
-
 void copy_to_buffer(VkBuffer dst, VkDeviceSize dst_offset, VkDeviceSize size, const void *data) {
     assert(size <= g_vk.staging_size && "staging buffer too small");
 
@@ -132,8 +99,7 @@ void renderer_buffer_data(R_BufferTarget target, size_t size, const void *data, 
         : VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
     if (!reuse) {
-        g_vk.buffers[h] = create_buffer(size, uf, mf, &g_vk.buffer_memories[h]);
-        if (g_vk.buffers[h] == VK_NULL_HANDLE) return;
+        if (!vk_create_buffer(size, uf, mf, &g_vk.buffers[h], &g_vk.buffer_memories[h])) return;
         g_vk.buffer_sizes[h] = size;
     }
 

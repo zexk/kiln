@@ -144,33 +144,26 @@ typedef struct {
 extern VAOState g_vao_state;
 extern R_VAO    g_current_vao;
 
-/* Helpers */
-uint32_t      find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props);
-VkShaderModule create_shader_module(const char *code, size_t size);
-VkBuffer       create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
-                             VkMemoryPropertyFlags props, VkDeviceMemory *out_memory);
+/* Shared Vulkan helpers (defined in render_vk.c, use the rich renderer's device) */
+bool vk_find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props, uint32_t *out);
+bool vk_create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                      VkMemoryPropertyFlags props, VkBuffer *buffer, VkDeviceMemory *memory);
+void vk_image_barrier(VkCommandBuffer cmd, VkImage image,
+                      VkImageAspectFlags aspect, VkImageLayout old_layout,
+                      VkImageLayout new_layout,
+                      VkAccessFlags src_access, VkAccessFlags dst_access,
+                      VkPipelineStageFlags src_stage, VkPipelineStageFlags dst_stage);
 
-/* Instance/device */
-bool create_instance(void);
-bool select_physical_device(void);
-bool find_queue_families(void);
-bool create_device(void);
-bool create_surface(void);
+/* From-memory shader module (thin renderer, defined in r_renderer.c) */
+VkShaderModule create_shader_module(const char *code, size_t size);
+
+/* Thin-renderer init helpers (defined in r_instance.c) */
 bool create_descriptor_pool(void);
 bool create_default_sampler(void);
 void init_resource_arrays(void);
 
-/* Swapchain */
-bool create_swapchain(void);
-bool create_swap_image_views(void);
-bool create_depth_buffer(void);
-void cleanup_swapchain(void);
-bool recreate_swapchain(void);
-
-/* Command/sync */
+/* Command pool (thin renderer owns its own pool, defined in r_command.c) */
 bool create_command_pool(void);
-bool create_command_buffers(void);
-bool create_sync_objects(void);
 
 /* Pipeline */
 typedef enum {

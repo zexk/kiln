@@ -33,8 +33,10 @@ VkImage create_image(uint32_t width, uint32_t height, uint32_t depth,
     VkMemoryAllocateInfo ai = {0};
     ai.sType          = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     ai.allocationSize = reqs.size;
-    uint32_t mt = find_memory_type(reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    if (mt == UINT32_MAX) { vkDestroyImage(g_vk.device, img, NULL); return VK_NULL_HANDLE; }
+    uint32_t mt;
+    if (!vk_find_memory_type(reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &mt)) {
+        vkDestroyImage(g_vk.device, img, NULL); return VK_NULL_HANDLE;
+    }
     ai.memoryTypeIndex = mt;
 
     if (vkAllocateMemory(g_vk.device, &ai, NULL, out_memory) != VK_SUCCESS) {
@@ -100,9 +102,26 @@ void end_one_time_cmd(VkCommandBuffer cmd) {
     vkFreeCommandBuffers(g_vk.device, g_vk.cmd_pool, 1, &cmd);
 }
 
-static void image_barrier(VkCommandBuffer cmd, VkImage image,
+/* Multi-layer color barrier used for texture array transitions (layerCount > 1). */
+static void array_barrier(VkCommandBuffer cmd, VkImage image,
                            VkImageLayout old_layout, VkImageLayout new_layout,
                            uint32_t layers) {
+    VkAccessFlags src_access = 0, dst_access = 0;
+    VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+
+    if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
+        new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+        dst_stage  = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+               new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+        dst_access = VK_ACCESS_SHADER_READ_BIT;
+        src_stage  = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dst_stage  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    }
+
     VkImageMemoryBarrier b = {0};
     b.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     b.oldLayout                       = old_layout;
@@ -113,28 +132,34 @@ static void image_barrier(VkCommandBuffer cmd, VkImage image,
     b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
     b.subresourceRange.levelCount     = 1;
     b.subresourceRange.layerCount     = layers;
-
-    VkPipelineStageFlags src = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-    VkPipelineStageFlags dst = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-
-    if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
-        new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        dst             = VK_PIPELINE_STAGE_TRANSFER_BIT;
-    } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
-               new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        src             = VK_PIPELINE_STAGE_TRANSFER_BIT;
-        dst             = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    }
-    vkCmdPipelineBarrier(cmd, src, dst, 0, 0, NULL, 0, NULL, 1, &b);
+    b.srcAccessMask                   = src_access;
+    b.dstAccessMask                   = dst_access;
+    vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, NULL, 0, NULL, 1, &b);
 }
 
 bool transition_image_layout(VkImage image, VkImageLayout old_layout, VkImageLayout new_layout) {
     VkCommandBuffer cmd = begin_one_time_cmd();
     if (cmd == VK_NULL_HANDLE) return false;
-    image_barrier(cmd, image, old_layout, new_layout, 1);
+
+    VkAccessFlags src_access = 0, dst_access = 0;
+    VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+
+    if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
+        new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+        dst_stage  = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL &&
+               new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+        dst_access = VK_ACCESS_SHADER_READ_BIT;
+        src_stage  = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dst_stage  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    }
+
+    vk_image_barrier(cmd, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                     old_layout, new_layout,
+                     src_access, dst_access, src_stage, dst_stage);
     end_one_time_cmd(cmd);
     return true;
 }
@@ -273,7 +298,7 @@ R_Texture renderer_create_texture_array(int width, int height, int layers) {
     /* Transition all layers to TRANSFER_DST so sub-image uploads work */
     VkCommandBuffer cmd = begin_one_time_cmd();
     if (cmd != VK_NULL_HANDLE) {
-        image_barrier(cmd, g_vk.textures[tex],
+        array_barrier(cmd, g_vk.textures[tex],
                       VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                       (uint32_t)layers);
         end_one_time_cmd(cmd);
@@ -293,7 +318,7 @@ void renderer_tex_sub_image_array(int layer, int width, int height, const void *
     if ((uint32_t)layer + 1 == g_vk.texture_depths[tex]) {
         VkCommandBuffer cmd = begin_one_time_cmd();
         if (cmd != VK_NULL_HANDLE) {
-            image_barrier(cmd, g_vk.textures[tex],
+            array_barrier(cmd, g_vk.textures[tex],
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                           g_vk.texture_depths[tex]);

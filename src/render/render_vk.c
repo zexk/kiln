@@ -491,7 +491,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
     return VK_FALSE;
 }
 
-static bool find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props,
+bool vk_find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props,
                              uint32_t *out) {
     VkPhysicalDeviceMemoryProperties mem;
     vkGetPhysicalDeviceMemoryProperties(g.physical_device, &mem);
@@ -505,7 +505,7 @@ static bool find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props,
     return false;
 }
 
-static bool create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
+bool vk_create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
                           VkMemoryPropertyFlags props, VkBuffer *buffer,
                           VkDeviceMemory *memory) {
     VkBufferCreateInfo info = {0};
@@ -519,7 +519,7 @@ static bool create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
     vkGetBufferMemoryRequirements(g.device, *buffer, &req);
 
     uint32_t type_index;
-    if (!find_memory_type(req.memoryTypeBits, props, &type_index)) {
+    if (!vk_find_memory_type(req.memoryTypeBits, props, &type_index)) {
         fprintf(stderr, "[render] no suitable memory type for buffer\n");
         return false;
     }
@@ -537,7 +537,7 @@ static bool create_buffer(VkDeviceSize size, VkBufferUsageFlags usage,
 static bool create_filled_buffer(const void *data, VkDeviceSize size,
                                  VkBufferUsageFlags usage, VkBuffer *buffer,
                                  VkDeviceMemory *memory) {
-    if (!create_buffer(size, usage,
+    if (!vk_create_buffer(size, usage,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                        buffer, memory)) {
@@ -611,7 +611,7 @@ static bool read_file(const char *path, uint32_t **out_data, size_t *out_size) {
     return true;
 }
 
-static bool create_shader_module(const char *name, VkShaderModule *out) {
+static bool load_spv_module(const char *name, VkShaderModule *out) {
     char path[2048];
     snprintf(path, sizeof(path), "%s/%s.spv", g.shader_dir, name);
 
@@ -1007,7 +1007,7 @@ static bool create_depth_resources(void) {
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(g.device, g.depth_image, &req);
     uint32_t type_index;
-    if (!find_memory_type(req.memoryTypeBits,
+    if (!vk_find_memory_type(req.memoryTypeBits,
                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &type_index)) {
         return false;
     }
@@ -1052,7 +1052,7 @@ static bool make_color_image(VkFormat fmt, VkExtent2D ext, VkImageUsageFlags usa
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(g.device, *img, &req);
     uint32_t mtype;
-    if (!find_memory_type(req.memoryTypeBits,
+    if (!vk_find_memory_type(req.memoryTypeBits,
                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &mtype))
         return false;
     VkMemoryAllocateInfo alloc = {0};
@@ -1115,8 +1115,8 @@ static void destroy_render_targets(void) {
 static bool build_pp_pipeline(const char *frag, VkFormat target_fmt,
                               VkPipeline *out) {
     VkShaderModule vmod, fmod;
-    if (!create_shader_module("fullscreen.vert", &vmod) ||
-        !create_shader_module(frag, &fmod))
+    if (!load_spv_module("fullscreen.vert", &vmod) ||
+        !load_spv_module(frag, &fmod))
         return false;
 
     VkPipelineShaderStageCreateInfo stages[2] = {0};
@@ -1366,7 +1366,7 @@ static bool create_scene_infra(void) {
     VkMemoryRequirements sreq;
     vkGetImageMemoryRequirements(g.device, g.shadow_image, &sreq);
     uint32_t stype;
-    if (!find_memory_type(sreq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    if (!vk_find_memory_type(sreq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                           &stype))
         return false;
     VkMemoryAllocateInfo salloc = {0};
@@ -1443,7 +1443,7 @@ static bool create_scene_infra(void) {
     VK_CHECK(vkCreateDescriptorPool(g.device, &pool_ci, NULL, &g.scene_pool));
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        if (!create_buffer(sizeof(scene_ubo_t), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        if (!vk_create_buffer(sizeof(scene_ubo_t), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            &g.scene_ubo_buf[i], &g.scene_ubo_mem[i])) {
@@ -1536,8 +1536,8 @@ static bool create_skybox_infra(void) {
     VK_CHECK(vkCreatePipelineLayout(g.device, &plci, NULL, &g.skybox_layout));
 
     VkShaderModule vmod, fmod;
-    if (!create_shader_module("skybox.vert", &vmod) ||
-        !create_shader_module("skybox.frag", &fmod))
+    if (!load_spv_module("skybox.vert", &vmod) ||
+        !load_spv_module("skybox.frag", &fmod))
         return false;
 
     VkPipelineShaderStageCreateInfo stages[2] = {0};
@@ -1611,7 +1611,7 @@ static bool create_skybox_infra(void) {
 
 static bool create_shadow_pipeline(void) {
     VkShaderModule vert;
-    if (!create_shader_module("shadow.vert", &vert)) return false;
+    if (!load_spv_module("shadow.vert", &vert)) return false;
 
     VkPushConstantRange push = {VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(mat4_t)};
     VkPipelineLayoutCreateInfo layout_ci = {0};
@@ -1709,8 +1709,8 @@ static bool create_shadow_pipeline(void) {
    g.pipeline_layout.  poly_mode selects fill vs wireframe. */
 static bool build_mesh_pipeline(VkPolygonMode poly_mode, VkPipeline *out) {
     VkShaderModule vert, frag;
-    if (!create_shader_module("mesh.vert", &vert) ||
-        !create_shader_module("mesh.frag", &frag)) {
+    if (!load_spv_module("mesh.vert", &vert) ||
+        !load_spv_module("mesh.frag", &frag)) {
         return false;
     }
 
@@ -1820,8 +1820,8 @@ static bool build_mesh_pipeline(VkPolygonMode poly_mode, VkPipeline *out) {
    Both bindings declared: 0 = vertex (VERTEX_RATE), 1 = instance (INSTANCE_RATE). */
 static bool build_inst_pipeline(VkPolygonMode poly_mode, VkPipeline *out) {
     VkShaderModule vert, frag;
-    if (!create_shader_module("mesh_inst.vert", &vert) ||
-        !create_shader_module("mesh.frag", &frag))
+    if (!load_spv_module("mesh_inst.vert", &vert) ||
+        !load_spv_module("mesh.frag", &frag))
         return false;
 
     VkPipelineShaderStageCreateInfo stages[2] = {0};
@@ -1944,7 +1944,7 @@ static bool create_inst_pipelines(void) {
 
     /* Instanced shadow pipeline — reuses shadow_layout (same 64-byte push). */
     VkShaderModule sv;
-    if (!create_shader_module("shadow_inst.vert", &sv)) return false;
+    if (!load_spv_module("shadow_inst.vert", &sv)) return false;
 
     VkPipelineShaderStageCreateInfo sstage = {0};
     sstage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -2040,7 +2040,7 @@ static bool create_inst_pipelines(void) {
     /* Per-frame GPU instance buffer (persistently mapped). */
     VkDeviceSize ibuf_size = (VkDeviceSize)MAX_INST_TOTAL * sizeof(mat4_t);
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        if (!create_buffer(ibuf_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        if (!vk_create_buffer(ibuf_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            &g.inst_vbuf[i], &g.inst_vmem[i]))
@@ -2084,7 +2084,7 @@ static bool create_cull_pipeline(void) {
     VK_CHECK(vkCreatePipelineLayout(g.device, &plci, NULL, &g.cull_layout));
 
     VkShaderModule cs;
-    if (!create_shader_module("cull.comp", &cs)) return false;
+    if (!load_spv_module("cull.comp", &cs)) return false;
     VkPipelineShaderStageCreateInfo stage = {0};
     stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -2109,26 +2109,26 @@ static bool create_cull_pipeline(void) {
     VkDeviceSize indirect_size = (VkDeviceSize)MAX_INST_BATCHES * sizeof(VkDrawIndexedIndirectCommand);
 
     for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; f++) {
-        if (!create_buffer(inst_size,
+        if (!vk_create_buffer(inst_size,
                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            &g.cull_inst_buf[f], &g.cull_inst_mem[f])) return false;
         VK_CHECK(vkMapMemory(g.device, g.cull_inst_mem[f], 0, VK_WHOLE_SIZE, 0,
                              &g.cull_inst_mapped[f]));
 
-        if (!create_buffer(batch_size,
+        if (!vk_create_buffer(batch_size,
                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            &g.cull_batch_buf[f], &g.cull_batch_mem[f])) return false;
         VK_CHECK(vkMapMemory(g.device, g.cull_batch_mem[f], 0, VK_WHOLE_SIZE, 0,
                              &g.cull_batch_mapped[f]));
 
-        if (!create_buffer(out_size,
+        if (!vk_create_buffer(out_size,
                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                            &g.cull_out_buf[f], &g.cull_out_mem[f])) return false;
 
-        if (!create_buffer(indirect_size,
+        if (!vk_create_buffer(indirect_size,
                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            &g.cull_indirect_buf[f], &g.cull_indirect_mem[f])) return false;
@@ -2200,7 +2200,7 @@ static bool create_particle_pipeline(void) {
     VK_CHECK(vkCreatePipelineLayout(g.device, &plci, NULL, &g.particle_layout));
 
     VkShaderModule cs;
-    if (!create_shader_module("particles.comp", &cs)) return false;
+    if (!load_spv_module("particles.comp", &cs)) return false;
 
     VkPipelineShaderStageCreateInfo stage = {0};
     stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -2251,8 +2251,8 @@ static bool create_pipeline(void) {
 
 static bool create_text_pipeline(void) {
     VkShaderModule vert, frag;
-    if (!create_shader_module("text.vert", &vert) ||
-        !create_shader_module("text.frag", &frag)) {
+    if (!load_spv_module("text.vert", &vert) ||
+        !load_spv_module("text.frag", &frag)) {
         return false;
     }
 
@@ -2388,7 +2388,7 @@ static bool create_text_buffers(void) {
     }
     VkDeviceSize size = sizeof(text_vertex_t) * MAX_TEXT_VERTS;
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        if (!create_buffer(size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        if (!vk_create_buffer(size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            &g.text_buffer[i], &g.text_memory[i])) {
@@ -2498,7 +2498,7 @@ static bool recreate_swapchain(void) {
 /* frame recording                                                          */
 /* ----------------------------------------------------------------------- */
 
-static void image_barrier(VkCommandBuffer cmd, VkImage image,
+void vk_image_barrier(VkCommandBuffer cmd, VkImage image,
                           VkImageAspectFlags aspect, VkImageLayout old_layout,
                           VkImageLayout new_layout,
                           VkAccessFlags src_access, VkAccessFlags dst_access,
@@ -2765,7 +2765,7 @@ gpu_emitter_handle_t render_create_gpu_emitter(mesh_handle_t mesh,
     VkDeviceSize es = (VkDeviceSize)MAX_EMIT_PER_FRAME * sizeof(gpu_particle_t);
 
     /* Particle simulation SSBO: device-local, needs TRANSFER_DST for zero-fill. */
-    if (!create_buffer(ps,
+    if (!vk_create_buffer(ps,
                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                        &e->particle_buf, &e->particle_mem)) goto fail;
@@ -2777,13 +2777,13 @@ gpu_emitter_handle_t render_create_gpu_emitter(mesh_handle_t mesh,
 
     for (int f = 0; f < MAX_FRAMES_IN_FLIGHT; f++) {
         /* Matrix output: device-local, STORAGE + VERTEX_BUFFER. */
-        if (!create_buffer(ms,
+        if (!vk_create_buffer(ms,
                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                            &e->matrix_buf[f], &e->matrix_mem[f])) goto fail;
 
         /* Indirect args: host-visible so instance_count can be reset via mapped ptr. */
-        if (!create_buffer(is,
+        if (!vk_create_buffer(is,
                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            &e->indirect_buf[f], &e->indirect_mem[f])) goto fail;
@@ -2796,7 +2796,7 @@ gpu_emitter_handle_t render_create_gpu_emitter(mesh_handle_t mesh,
         ic->firstInstance = 0;
 
         /* Emit staging: host-visible, STORAGE_BUFFER. */
-        if (!create_buffer(es,
+        if (!vk_create_buffer(es,
                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            &e->emit_buf[f], &e->emit_mem[f])) goto fail;
@@ -3128,13 +3128,13 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     /* HDR scene pass  →  g.color_image                                    */
     /* ------------------------------------------------------------------ */
 
-    image_barrier(cmd, g.color_image, VK_IMAGE_ASPECT_COLOR_BIT,
+    vk_image_barrier(cmd, g.color_image, VK_IMAGE_ASPECT_COLOR_BIT,
                   VK_IMAGE_LAYOUT_UNDEFINED,
                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-    image_barrier(cmd, g.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
+    vk_image_barrier(cmd, g.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
                   VK_IMAGE_LAYOUT_UNDEFINED,
                   VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, 0,
                   VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
@@ -3283,7 +3283,7 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     /* ------------------------------------------------------------------ */
 
     /* color_image: COLOR_ATTACHMENT → SHADER_READ_ONLY for sampling. */
-    image_barrier(cmd, g.color_image, VK_IMAGE_ASPECT_COLOR_BIT,
+    vk_image_barrier(cmd, g.color_image, VK_IMAGE_ASPECT_COLOR_BIT,
                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -3293,7 +3293,7 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
 
     /* Helper: render one fullscreen post-process pass. */
 #define PP_PASS(target_img, target_view, target_ext, ds, src_set, push_data, push_sz) do { \
-    image_barrier(cmd, (target_img), VK_IMAGE_ASPECT_COLOR_BIT,                 \
+    vk_image_barrier(cmd, (target_img), VK_IMAGE_ASPECT_COLOR_BIT,                 \
                   (ds), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,             \
                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,                          \
                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,                             \
@@ -3317,7 +3317,7 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
                        0, (push_sz), (push_data));                               \
     vkCmdDraw(cmd, 3, 1, 0, 0);                                                 \
     vkCmdEndRendering(cmd);                                                      \
-    image_barrier(cmd, (target_img), VK_IMAGE_ASPECT_COLOR_BIT,                 \
+    vk_image_barrier(cmd, (target_img), VK_IMAGE_ASPECT_COLOR_BIT,                 \
                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,                      \
                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,                      \
                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,                          \
@@ -3339,7 +3339,7 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
             VK_IMAGE_LAYOUT_UNDEFINED, g.pp_blur_a_set, blur_h, 8);
 
     /* Blur V: bloom_b → bloom_a (reuse bloom_a as output) */
-    image_barrier(cmd, g.bloom_a_image, VK_IMAGE_ASPECT_COLOR_BIT,
+    vk_image_barrier(cmd, g.bloom_a_image, VK_IMAGE_ASPECT_COLOR_BIT,
                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                   VK_ACCESS_SHADER_READ_BIT,
@@ -3371,7 +3371,7 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRendering(cmd);
     }
-    image_barrier(cmd, g.bloom_a_image, VK_IMAGE_ASPECT_COLOR_BIT,
+    vk_image_barrier(cmd, g.bloom_a_image, VK_IMAGE_ASPECT_COLOR_BIT,
                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -3384,7 +3384,7 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     /* Composite + overlay  →  swapchain image                             */
     /* ------------------------------------------------------------------ */
 
-    image_barrier(cmd, g.images[image_index], VK_IMAGE_ASPECT_COLOR_BIT,
+    vk_image_barrier(cmd, g.images[image_index], VK_IMAGE_ASPECT_COLOR_BIT,
                   VK_IMAGE_LAYOUT_UNDEFINED,
                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
@@ -3436,7 +3436,16 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
        The swapchain image stays in COLOR_ATTACHMENT_OPTIMAL across the pass.
        Depth is reused with a fresh clear so overlay objects sort correctly. */
     if (g_overlay_fn) {
-        image_barrier(cmd, g.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
+        /* Composite writes must be visible to the overlay's LOAD_OP_LOAD. */
+        vk_image_barrier(cmd, g.images[image_index], VK_IMAGE_ASPECT_COLOR_BIT,
+                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                      VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+        vk_image_barrier(cmd, g.depth_image, VK_IMAGE_ASPECT_DEPTH_BIT,
                       VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                       VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
@@ -3478,7 +3487,7 @@ static void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
         vkCmdEndRendering(cmd);
     }
 
-    image_barrier(cmd, g.images[image_index], VK_IMAGE_ASPECT_COLOR_BIT,
+    vk_image_barrier(cmd, g.images[image_index], VK_IMAGE_ASPECT_COLOR_BIT,
                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                   VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0,
@@ -3709,7 +3718,7 @@ texture_handle_t render_upload_texture(const uint8_t *rgba, uint32_t w,
         VkMemoryRequirements req;
         vkGetImageMemoryRequirements(g.device, t.image, &req);
         uint32_t type_index;
-        if (find_memory_type(req.memoryTypeBits,
+        if (vk_find_memory_type(req.memoryTypeBits,
                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                              &type_index)) {
             VkMemoryAllocateInfo alloc = {0};
@@ -3722,7 +3731,7 @@ texture_handle_t render_upload_texture(const uint8_t *rgba, uint32_t w,
                     VK_SUCCESS) {
 
                 VkCommandBuffer cmd = begin_single_time();
-                image_barrier(cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                vk_image_barrier(cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT,
                               VK_IMAGE_LAYOUT_UNDEFINED,
                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
                               VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -3742,7 +3751,7 @@ texture_handle_t render_upload_texture(const uint8_t *rgba, uint32_t w,
                 if (mip_count > 1) {
                     generate_mipmaps(cmd, t.image, w, h, mip_count);
                 } else {
-                    image_barrier(cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                    vk_image_barrier(cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT,
                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                   VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -3886,7 +3895,7 @@ cubemap_handle_t render_upload_cubemap(const uint8_t *faces[6],
     VkDeviceSize face_size = (VkDeviceSize)w * h * 4;
     VkDeviceSize total     = face_size * 6;
     VkBuffer     staging; VkDeviceMemory staging_mem;
-    if (!create_buffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    if (!vk_create_buffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                        &staging, &staging_mem))
@@ -3917,7 +3926,7 @@ cubemap_handle_t render_upload_cubemap(const uint8_t *faces[6],
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(g.device, img, &req);
     uint32_t mtype;
-    if (!find_memory_type(req.memoryTypeBits,
+    if (!vk_find_memory_type(req.memoryTypeBits,
                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &mtype))
         goto fail_img;
     VkMemoryAllocateInfo mai = {0};
@@ -4060,12 +4069,12 @@ void render_draw(void) {
         uint32_t w = g.extent.width, h = g.extent.height;
         VkDeviceSize sz = (VkDeviceSize)w * h * 8; /* RGBA16F = 8 bytes/px */
         VkBuffer sb; VkDeviceMemory sm;
-        if (create_buffer(sz, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        if (vk_create_buffer(sz, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                           &sb, &sm)) {
             VkCommandBuffer sc = begin_single_time();
-            image_barrier(sc, g.color_image, VK_IMAGE_ASPECT_COLOR_BIT,
+            vk_image_barrier(sc, g.color_image, VK_IMAGE_ASPECT_COLOR_BIT,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                           VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT,
@@ -4078,7 +4087,7 @@ void render_draw(void) {
             vkCmdCopyImageToBuffer(sc, g.color_image,
                                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                    sb, 1, &bic);
-            image_barrier(sc, g.color_image, VK_IMAGE_ASPECT_COLOR_BIT,
+            vk_image_barrier(sc, g.color_image, VK_IMAGE_ASPECT_COLOR_BIT,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                           VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,

@@ -25,7 +25,11 @@ if(KILN_RENDERER STREQUAL "vulkan")
     endforeach()
     add_custom_target(kiln_shaders DEPENDS ${spv_files})
 
-    add_library(kiln_render STATIC render_vk.c particles.c)
+    # kiln_render: rich high-level renderer + low-level renderer_* API (unified)
+    add_library(kiln_render STATIC
+        render_vk.c particles.c
+        r_renderer.c r_instance.c r_command.c
+        r_pipeline.c r_buffer.c r_texture.c r_draw.c)
     add_dependencies(kiln_render kiln_shaders)
     target_compile_definitions(kiln_render PRIVATE
         KILN_SHADER_DIR="${shader_out_dir}")
@@ -35,21 +39,6 @@ if(KILN_RENDERER STREQUAL "vulkan")
 
     install(DIRECTORY ${shader_out_dir}/ DESTINATION share/kiln/shaders
             FILES_MATCHING PATTERN "*.spv")
-
-    # ── Low-level abstract renderer (renderer_* API, ported from Kyub) ────────
-    add_library(kiln_renderer STATIC
-        r_renderer.c
-        r_instance.c
-        r_swapchain.c
-        r_command.c
-        r_pipeline.c
-        r_buffer.c
-        r_texture.c
-        r_draw.c)
-    target_link_libraries(kiln_renderer PUBLIC
-        kiln_render kiln_core kiln_platform Vulkan::Vulkan
-        $<$<NOT:$<BOOL:${WIN32}>>:X11::X11>)
-    target_include_directories(kiln_renderer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 else()
     message(FATAL_ERROR "Unknown renderer backend: ${KILN_RENDERER}")

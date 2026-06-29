@@ -58,18 +58,6 @@ void renderer_save_screenshot(const char *path) { (void)path; }
  * Helpers (definitions referenced by all translation units)
  * ============================================================================ */
 
-uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props) {
-    VkPhysicalDeviceMemoryProperties mem_props;
-    vkGetPhysicalDeviceMemoryProperties(g_vk.physical_device, &mem_props);
-    for (uint32_t i = 0; i < mem_props.memoryTypeCount; i++) {
-        if ((type_filter & (1u << i)) &&
-            (mem_props.memoryTypes[i].propertyFlags & props) == props)
-            return i;
-    }
-    fprintf(stderr, "Failed to find suitable memory type\n");
-    return UINT32_MAX;
-}
-
 VkShaderModule create_shader_module(const char *code, size_t size) {
     VkShaderModuleCreateInfo ci = {0};
     ci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -132,13 +120,13 @@ bool renderer_init(int width, int height, const platform_native_handles_t *nativ
 
     init_resource_arrays();
 
-    g_vk.staging_size   = 16 * 1024 * 1024;
-    g_vk.staging_buffer = create_buffer(g_vk.staging_size,
-                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                        &g_vk.staging_memory);
-    if (g_vk.staging_buffer == VK_NULL_HANDLE) {
+    g_vk.staging_size = 16 * 1024 * 1024;
+    if (!vk_create_buffer(g_vk.staging_size,
+                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          &g_vk.staging_buffer,
+                          &g_vk.staging_memory)) {
         fprintf(stderr, "[renderer] staging buffer failed\n");
         renderer_shutdown();
         return false;
@@ -198,10 +186,7 @@ void renderer_shutdown(void) {
             g_vk.texture_samplers[i] != VK_NULL_HANDLE)
             vkDestroySampler(g_vk.device, g_vk.texture_samplers[i], NULL);
     }
-    for (uint32_t i = 0; i < g_vk.vao_count; i++) {
-        if (g_vk.vaos[i])             vkDestroyBuffer(g_vk.device, g_vk.vaos[i], NULL);
-        if (g_vk.vao_index_buffers[i]) vkDestroyBuffer(g_vk.device, g_vk.vao_index_buffers[i], NULL);
-    }
+    /* VAOs don't own their buffers — ownership is in g_vk.buffers[]; no destroy here. */
 
     free(g_vk.pipelines);
     free(g_vk.buffers);

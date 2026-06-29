@@ -20,7 +20,7 @@ add_dependencies(kiln_ui kiln_ui_shaders)
 target_include_directories(kiln_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(kiln_ui PRIVATE
     KILN_UI_SHADER_DIR="${ui_shader_out_dir}")
-target_link_libraries(kiln_ui PUBLIC kiln_core kiln_render kiln_renderer)
+target_link_libraries(kiln_ui PUBLIC kiln_core kiln_render)
 
 install(DIRECTORY ${ui_shader_out_dir}/ DESTINATION share/kiln/shaders
         FILES_MATCHING PATTERN "*.spv")

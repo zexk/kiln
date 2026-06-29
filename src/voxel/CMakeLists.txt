@@ -6,5 +6,5 @@ add_library(kiln_voxel STATIC
 target_include_directories(kiln_voxel PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kiln_voxel PUBLIC
     kiln_core
-    kiln_renderer
+    kiln_render
     kiln_texture)

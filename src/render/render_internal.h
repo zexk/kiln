@@ -201,9 +201,13 @@ char         *load_spirv_file(const char *path, size_t *out_size);
 VkShaderModule load_shader_module(const char *path);
 VkDescriptorSetLayout create_texture_descriptor_layout(void);
 VkPipelineLayout      create_pipeline_layout(VkDescriptorSetLayout tex_layout);
-void get_pipeline_config(const char *vert_path, const char *frag_path, PipelineConfig *cfg);
+void get_pipeline_config(R_PipelineType type, const char *vert_path, PipelineConfig *cfg);
 VkPipeline create_graphics_pipeline(VkShaderModule vert, VkShaderModule frag,
                                     VkPipelineLayout layout, const PipelineConfig *cfg);
+
+/* Command helpers */
+VkCommandBuffer begin_one_time_cmd(void);
+void            end_one_time_cmd(VkCommandBuffer cmd);
 
 /* Buffer helpers */
 void copy_to_buffer(VkBuffer dst, VkDeviceSize dst_offset, VkDeviceSize size, const void *data);

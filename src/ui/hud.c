@@ -71,7 +71,7 @@ bool hud_init(hud_t *g) {
 
     char *vert = platform_resolve_path("shaders/hud.vert");
     char *frag = platform_resolve_path("shaders/hud.frag");
-    g->program = renderer_create_program(vert, frag);
+    g->program = renderer_create_program_typed(vert, frag, R_PIPELINE_HUD);
     free(vert);
     free(frag);
     if (g->program == R_INVALID_HANDLE) return false;

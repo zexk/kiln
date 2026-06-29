@@ -487,7 +487,8 @@ bool kv_solid_query(void *world_opaque, int x, int y, int z) {
 
 static void ensure_shader(kv_world_t *w) {
     if (w->shader != R_INVALID_HANDLE) return;
-    w->shader = renderer_create_program("shaders/voxel.vert", "shaders/voxel.frag");
+    w->shader = renderer_create_program_typed("shaders/voxel.vert", "shaders/voxel.frag",
+                                               R_PIPELINE_VOXEL);
     if (w->shader == R_INVALID_HANDLE) return;
     w->loc_model       = renderer_uniform_location(w->shader, "model");
     w->loc_view        = renderer_uniform_location(w->shader, "view");

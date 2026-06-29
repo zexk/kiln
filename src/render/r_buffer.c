@@ -45,30 +45,11 @@ void copy_to_buffer(VkBuffer dst, VkDeviceSize dst_offset, VkDeviceSize size, co
         VkBufferCopy copy = {.srcOffset = 0, .dstOffset = dst_offset, .size = size};
         vkCmdCopyBuffer(g_active_cmd, g_vk.staging_buffer, dst, 1, &copy);
     } else {
-        VkCommandBuffer cmd;
-        VkCommandBufferAllocateInfo ai = {0};
-        ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        ai.commandPool        = g_vk.cmd_pool;
-        ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = 1;
-        if (vkAllocateCommandBuffers(g_vk.device, &ai, &cmd) != VK_SUCCESS) return;
-
-        VkCommandBufferBeginInfo bi = {0};
-        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd, &bi);
-
+        VkCommandBuffer cmd = begin_one_time_cmd();
+        if (cmd == VK_NULL_HANDLE) return;
         VkBufferCopy copy = {.srcOffset = 0, .dstOffset = dst_offset, .size = size};
         vkCmdCopyBuffer(cmd, g_vk.staging_buffer, dst, 1, &copy);
-        vkEndCommandBuffer(cmd);
-
-        VkSubmitInfo si = {0};
-        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers    = &cmd;
-        vkQueueSubmit(g_vk.graphics_queue, 1, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(g_vk.graphics_queue);
-        vkFreeCommandBuffers(g_vk.device, g_vk.cmd_pool, 1, &cmd);
+        end_one_time_cmd(cmd);
     }
 }
 
@@ -196,10 +177,12 @@ void renderer_buffer_sub_data(R_BufferTarget target, size_t offset, size_t size,
 
 void renderer_get_buffer_sub_data(R_BufferTarget target, size_t offset, size_t size, void *data) {
     (void)target; (void)offset; (void)size; (void)data;
+    fprintf(stderr, "[renderer] UNIMPLEMENTED: %s\n", __func__);
 }
 
 void renderer_bind_buffer_base(R_BufferTarget target, int index, R_Buffer buffer) {
     (void)target; (void)index; (void)buffer;
+    fprintf(stderr, "[renderer] UNIMPLEMENTED: %s\n", __func__);
 }
 
 /* ============================================================================

@@ -122,7 +122,20 @@ void renderer_line_width(float width);
 void renderer_push_attrib(void);
 void renderer_pop_attrib(void);
 
+typedef enum {
+    R_PIPELINE_AUTO,     /* detect from shader path (legacy) */
+    R_PIPELINE_TERRAIN,  /* default: 3D textured, back-cull */
+    R_PIPELINE_VOXEL,    /* 3D textured, no cull */
+    R_PIPELINE_SKYBOX,   /* skybox: depth LEQUAL, no write, no texture */
+    R_PIPELINE_OUTLINE,  /* line list, no depth write, depth bias */
+    R_PIPELINE_HUD,      /* 2D, no depth, blend, 16-byte push */
+    R_PIPELINE_UI,       /* 2D textured, no depth, blend */
+    R_PIPELINE_ICON,     /* 2D textured icon (inv), blend */
+} R_PipelineType;
+
 R_Program renderer_create_program(const char *vert_path, const char *frag_path);
+R_Program renderer_create_program_typed(const char *vert_path, const char *frag_path,
+                                         R_PipelineType type);
 R_Program renderer_create_compute(const char *comp_path);
 void renderer_destroy_program(R_Program program);
 void renderer_use_program(R_Program program);

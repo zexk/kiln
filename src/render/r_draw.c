@@ -81,10 +81,16 @@ void renderer_draw_elements(R_Primitive primitive, int count, int offset) {
     vkCmdDrawIndexed(g_active_cmd, (uint32_t)count, 1, (uint32_t)offset, 0, 0);
 }
 
-void renderer_draw_arrays_indirect(void) {}
+void renderer_draw_arrays_indirect(void) {
+    fprintf(stderr, "[renderer] UNIMPLEMENTED: %s\n", __func__);
+}
 
 void renderer_dispatch_compute(int groups_x, int groups_y, int groups_z) {
     (void)groups_x; (void)groups_y; (void)groups_z;
+    fprintf(stderr, "[renderer] UNIMPLEMENTED: %s\n", __func__);
 }
 
-void renderer_memory_barrier(R_BarrierBits bits) { (void)bits; }
+void renderer_memory_barrier(R_BarrierBits bits) {
+    (void)bits;
+    fprintf(stderr, "[renderer] UNIMPLEMENTED: %s\n", __func__);
+}

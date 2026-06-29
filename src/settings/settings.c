@@ -84,10 +84,12 @@ void settings_init(settings_t *s,
     s->engine.height         = 720;
     s->engine.vsync          = true;
     s->engine.fps_limit      = 0.0f;
-    s->engine.bloom          = true;
+    s->engine.bloom           = true;
     s->engine.bloom_threshold = 0.8f;
     s->engine.bloom_strength  = 0.5f;
     s->engine.bloom_exposure  = 1.0f;
+    s->engine.fov             = 60.0f;
+    s->engine.mouse_sensitivity = 0.002f;
 
     s->bindings.count = 0;
     for (int i = 0; i < n && i < SETTINGS_MAX_BINDINGS; i++) {
@@ -148,7 +150,9 @@ static void parse_line(settings_t *s, section_t *sec, char *line) {
         else if (strcmp(key, "bloom")          == 0) s->engine.bloom          = atoi(val) != 0;
         else if (strcmp(key, "bloom_threshold")== 0) s->engine.bloom_threshold= (float)atof(val);
         else if (strcmp(key, "bloom_strength") == 0) s->engine.bloom_strength = (float)atof(val);
-        else if (strcmp(key, "bloom_exposure") == 0) s->engine.bloom_exposure = (float)atof(val);
+        else if (strcmp(key, "bloom_exposure")    == 0) s->engine.bloom_exposure    = (float)atof(val);
+        else if (strcmp(key, "fov")               == 0) s->engine.fov               = (float)atof(val);
+        else if (strcmp(key, "mouse_sensitivity") == 0) s->engine.mouse_sensitivity = (float)atof(val);
     } else if (*sec == SEC_BINDINGS) {
         settings_set_key(s, key, key_name_to_code(val));
     }
@@ -194,7 +198,9 @@ static bool write_fn(FILE *f, void *ctx) {
     fprintf(f, "bloom=%d\n",          s->engine.bloom ? 1 : 0);
     fprintf(f, "bloom_threshold=%g\n",(double)s->engine.bloom_threshold);
     fprintf(f, "bloom_strength=%g\n", (double)s->engine.bloom_strength);
-    fprintf(f, "bloom_exposure=%g\n", (double)s->engine.bloom_exposure);
+    fprintf(f, "bloom_exposure=%g\n",    (double)s->engine.bloom_exposure);
+    fprintf(f, "fov=%g\n",              (double)s->engine.fov);
+    fprintf(f, "mouse_sensitivity=%g\n",(double)s->engine.mouse_sensitivity);
 
     if (s->bindings.count > 0) {
         fprintf(f, "\n[bindings]\n");

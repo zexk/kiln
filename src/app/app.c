@@ -63,13 +63,7 @@ static int add_prototype(app_t *app, const char *name, cpu_mesh_t *m,
         return -1;
     }
     vec3_t extent = vec3_sub(bmax, bmin);
-    float max_dim = extent.x;
-    if (extent.y > max_dim) {
-        max_dim = extent.y;
-    }
-    if (extent.z > max_dim) {
-        max_dim = extent.z;
-    }
+    float max_dim = kln_max3f(extent.x, extent.y, extent.z);
 
     cpu_mesh_recenter(m);
     mesh_handle_t mesh = render_upload_mesh(m);
@@ -511,37 +505,38 @@ static void history_update_entity(history_t *h, entity_t old_e, entity_t new_e) 
     }
 }
 
+static void cmd_do_spawn(app_t *app, cmd_t *c) {
+    entity_t old_e = c->entity;
+    entity_t e = spawn(app, c->proto, (vec3_t){0.0f, 0.0f, 0.0f});
+    if (e != ECS_ENTITY_NULL) {
+        transform_t *t = entity_get_component(app->world, e, app->transform_id);
+        if (t) {
+            t->position = c->xform.position;
+            t->rotation = c->xform.rotation;
+            t->scale    = c->xform.scale;
+        }
+        history_update_entity(&app->history, old_e, e);
+        app->selected = e;
+    }
+}
+
+static void cmd_do_destroy(app_t *app, cmd_t *c) {
+    if (entity_is_alive(app->world, c->entity)) {
+        if (app->selected == c->entity) app->selected = ECS_ENTITY_NULL;
+        entity_destroy(app->world, c->entity);
+    }
+}
+
 static void history_undo(app_t *app) {
     history_t *h = &app->history;
     if (h->pos == 0) return;
     h->pos--;
     cmd_t *c = &h->entries[h->pos];
     switch (c->type) {
-    case CMD_SPAWN:
-        if (entity_is_alive(app->world, c->entity)) {
-            if (app->selected == c->entity) app->selected = ECS_ENTITY_NULL;
-            entity_destroy(app->world, c->entity);
-        }
-        break;
-    case CMD_DELETE: {
-        entity_t old_e = c->entity;
-        entity_t e = spawn(app, c->proto, (vec3_t){0.0f, 0.0f, 0.0f});
-        if (e != ECS_ENTITY_NULL) {
-            transform_t *t =
-                entity_get_component(app->world, e, app->transform_id);
-            if (t) {
-                t->position = c->xform.position;
-                t->rotation = c->xform.rotation;
-                t->scale    = c->xform.scale;
-            }
-            history_update_entity(h, old_e, e);
-            app->selected = e;
-        }
-        break;
-    }
+    case CMD_SPAWN:     cmd_do_destroy(app, c); break;
+    case CMD_DELETE:    cmd_do_spawn(app, c); break;
     case CMD_TRANSFORM: {
-        transform_t *t =
-            entity_get_component(app->world, c->entity, app->transform_id);
+        transform_t *t = entity_get_component(app->world, c->entity, app->transform_id);
         if (t) {
             t->position = c->xform.position;
             t->rotation = c->xform.rotation;
@@ -559,31 +554,10 @@ static void history_redo(app_t *app) {
     cmd_t *c = &h->entries[h->pos];
     h->pos++;
     switch (c->type) {
-    case CMD_SPAWN: {
-        entity_t old_e = c->entity;
-        entity_t e = spawn(app, c->proto, (vec3_t){0.0f, 0.0f, 0.0f});
-        if (e != ECS_ENTITY_NULL) {
-            transform_t *t =
-                entity_get_component(app->world, e, app->transform_id);
-            if (t) {
-                t->position = c->xform.position;
-                t->rotation = c->xform.rotation;
-                t->scale    = c->xform.scale;
-            }
-            history_update_entity(h, old_e, e);
-            app->selected = e;
-        }
-        break;
-    }
-    case CMD_DELETE:
-        if (entity_is_alive(app->world, c->entity)) {
-            if (app->selected == c->entity) app->selected = ECS_ENTITY_NULL;
-            entity_destroy(app->world, c->entity);
-        }
-        break;
+    case CMD_SPAWN:     cmd_do_spawn(app, c); break;
+    case CMD_DELETE:    cmd_do_destroy(app, c); break;
     case CMD_TRANSFORM: {
-        transform_t *t =
-            entity_get_component(app->world, c->entity, app->transform_id);
+        transform_t *t = entity_get_component(app->world, c->entity, app->transform_id);
         if (t) {
             t->position = c->xform2.position;
             t->rotation = c->xform2.rotation;
@@ -1351,9 +1325,7 @@ void app_run(app_t *app) {
                                          app->transform_id);
                 if (ft) {
                     app->camera.target = ft->position;
-                    float size = ft->scale.x;
-                    if (ft->scale.y > size) size = ft->scale.y;
-                    if (ft->scale.z > size) size = ft->scale.z;
+                    float size = kln_max3f(ft->scale.x, ft->scale.y, ft->scale.z);
                     float d = size * 4.0f;
                     if (d < 0.5f)   d = 0.5f;
                     if (d > 100.0f) d = 100.0f;
@@ -1541,6 +1513,21 @@ void app_run(app_t *app) {
     }
 }
 
+static void sync_settings_from_app(app_t *app) {
+    uint32_t sw, sh;
+    window_size(app->window, &sw, &sh);
+    app->settings.engine.width             = sw;
+    app->settings.engine.height            = sh;
+    app->settings.engine.vsync             = app->vsync;
+    app->settings.engine.fps_limit         = app->fps_limit;
+    app->settings.engine.bloom             = app->bloom;
+    app->settings.engine.bloom_threshold   = app->bloom_threshold;
+    app->settings.engine.bloom_strength    = app->bloom_strength;
+    app->settings.engine.bloom_exposure    = app->bloom_exposure;
+    app->settings.engine.fov               = kln_degrees(app->camera.fov);
+    app->settings.engine.mouse_sensitivity = app->fly_cam.sensitivity;
+}
+
 void app_shutdown(app_t *app) {
     for (int i = 0; i < app->prototype_count; i++) {
         free(app->prototypes[i].pick_pos);
@@ -1549,19 +1536,7 @@ void app_shutdown(app_t *app) {
     if (app->particle_emitter != RENDER_GPU_EMITTER_INVALID)
         render_destroy_gpu_emitter(app->particle_emitter);
 
-    /* Persist live graphical state so the next launch picks it up. */
-    uint32_t sw, sh;
-    window_size(app->window, &sw, &sh);
-    app->settings.engine.width          = sw;
-    app->settings.engine.height         = sh;
-    app->settings.engine.vsync          = app->vsync;
-    app->settings.engine.fps_limit      = app->fps_limit;
-    app->settings.engine.bloom          = app->bloom;
-    app->settings.engine.bloom_threshold = app->bloom_threshold;
-    app->settings.engine.bloom_strength  = app->bloom_strength;
-    app->settings.engine.bloom_exposure       = app->bloom_exposure;
-    app->settings.engine.fov                  = kln_degrees(app->camera.fov);
-    app->settings.engine.mouse_sensitivity    = app->fly_cam.sensitivity;
+    sync_settings_from_app(app);
     settings_save(&app->settings, app->settings_path);
 
     render_shutdown();

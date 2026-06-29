@@ -74,7 +74,7 @@ static VkImageView create_image_array_view(VkImage image, VkFormat format, uint3
     return view;
 }
 
-static VkCommandBuffer begin_one_time_cmd(void) {
+VkCommandBuffer begin_one_time_cmd(void) {
     VkCommandBufferAllocateInfo ai = {0};
     ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     ai.commandPool        = g_vk.cmd_pool;
@@ -89,7 +89,7 @@ static VkCommandBuffer begin_one_time_cmd(void) {
     return cmd;
 }
 
-static void end_one_time_cmd(VkCommandBuffer cmd) {
+void end_one_time_cmd(VkCommandBuffer cmd) {
     vkEndCommandBuffer(cmd);
     VkSubmitInfo si = {0};
     si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -147,7 +147,7 @@ void upload_image_data(VkImage image, uint32_t width, uint32_t height, uint32_t 
     }
 
     void *mapped;
-    vkMapMemory(g_vk.device, g_vk.staging_memory, 0, data_size, 0, &mapped);
+    if (vkMapMemory(g_vk.device, g_vk.staging_memory, 0, data_size, 0, &mapped) != VK_SUCCESS) return;
     memcpy(mapped, data, data_size);
     vkUnmapMemory(g_vk.device, g_vk.staging_memory);
 
@@ -302,64 +302,47 @@ void renderer_tex_sub_image_array(int layer, int width, int height, const void *
     }
 }
 
+static void setup_tex(R_Texture tex, uint32_t width, uint32_t height, uint32_t depth,
+                      const void *data, VkImageViewType view_type) {
+    bool same = (g_vk.textures[tex] &&
+                 g_vk.texture_widths[tex]  == width &&
+                 g_vk.texture_heights[tex] == height &&
+                 g_vk.texture_depths[tex]  == depth);
+    if (!same && g_vk.textures[tex]) renderer_destroy_texture(tex);
+    if (!same) {
+        g_vk.textures[tex] = create_image(width, height, depth, 1,
+                                           VK_FORMAT_R8G8B8A8_SRGB,
+                                           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                           &g_vk.texture_memories[tex]);
+        g_vk.texture_widths[tex]   = width;
+        g_vk.texture_heights[tex]  = height;
+        g_vk.texture_depths[tex]   = depth;
+        g_vk.texture_samplers[tex] = g_vk.default_sampler;
+        g_vk.texture_views[tex]    = create_image_view(g_vk.textures[tex],
+                                                        VK_FORMAT_R8G8B8A8_SRGB, view_type);
+    }
+    if (data)
+        upload_image_data(g_vk.textures[tex], width, height, depth,
+                          data, (VkDeviceSize)width * height * depth * 4);
+}
+
 void renderer_tex_image_2d(int width, int height, const void *data) {
     CHECK_DEVICE();
     R_Texture tex = g_bound_textures[g_active_texture_unit];
     if (tex >= g_vk.texture_count) return;
-
-    bool same = (g_vk.textures[tex] &&
-                 g_vk.texture_widths[tex]  == (uint32_t)width &&
-                 g_vk.texture_heights[tex] == (uint32_t)height &&
-                 g_vk.texture_depths[tex]  == 1);
-    if (!same && g_vk.textures[tex]) renderer_destroy_texture(tex);
-
-    if (!same) {
-        g_vk.textures[tex] = create_image((uint32_t)width, (uint32_t)height, 1, 1,
-                                           VK_FORMAT_R8G8B8A8_SRGB,
-                                           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                           &g_vk.texture_memories[tex]);
-        g_vk.texture_widths[tex]  = (uint32_t)width;
-        g_vk.texture_heights[tex] = (uint32_t)height;
-        g_vk.texture_depths[tex]  = 1;
-        g_vk.texture_samplers[tex] = g_vk.default_sampler;
-    }
-
-    if (data) upload_image_data(g_vk.textures[tex], (uint32_t)width, (uint32_t)height, 1,
-                                data, (VkDeviceSize)width * height * 4);
-    g_vk.texture_views[tex] = create_image_view(g_vk.textures[tex],
-                                                 VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_VIEW_TYPE_2D);
+    setup_tex(tex, (uint32_t)width, (uint32_t)height, 1, data, VK_IMAGE_VIEW_TYPE_2D);
 }
 
 void renderer_tex_image_3d(int width, int height, int depth, const void *data) {
+    CHECK_DEVICE();
     R_Texture tex = g_bound_textures[g_active_texture_unit];
     if (tex >= g_vk.texture_count) return;
-
-    bool same = (g_vk.textures[tex] &&
-                 g_vk.texture_widths[tex]  == (uint32_t)width &&
-                 g_vk.texture_heights[tex] == (uint32_t)height &&
-                 g_vk.texture_depths[tex]  == (uint32_t)depth);
-    if (!same && g_vk.textures[tex]) renderer_destroy_texture(tex);
-
-    if (!same) {
-        g_vk.textures[tex] = create_image((uint32_t)width, (uint32_t)height, (uint32_t)depth, 1,
-                                           VK_FORMAT_R8G8B8A8_SRGB,
-                                           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                           &g_vk.texture_memories[tex]);
-        g_vk.texture_widths[tex]  = (uint32_t)width;
-        g_vk.texture_heights[tex] = (uint32_t)height;
-        g_vk.texture_depths[tex]  = (uint32_t)depth;
-        g_vk.texture_samplers[tex] = g_vk.default_sampler;
-    }
-
-    if (data) upload_image_data(g_vk.textures[tex], (uint32_t)width, (uint32_t)height, (uint32_t)depth,
-                                data, (VkDeviceSize)width * height * depth * 4);
-    if (!same)
-        g_vk.texture_views[tex] = create_image_view(g_vk.textures[tex],
-                                                     VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_VIEW_TYPE_3D);
+    setup_tex(tex, (uint32_t)width, (uint32_t)height, (uint32_t)depth, data, VK_IMAGE_VIEW_TYPE_3D);
 }
 
 void renderer_tex_sub_image_3d(int x, int y, int z, int w, int h, int d, const void *data) {
     (void)x; (void)y; (void)z; (void)w; (void)h; (void)d; (void)data;
+    fprintf(stderr, "[renderer] UNIMPLEMENTED: %s\n", __func__);
 }
 
 void renderer_tex_param(R_TextureTarget target, R_TexParam param, R_TexValue value) {
@@ -396,8 +379,11 @@ void renderer_tex_param(R_TextureTarget target, R_TexParam param, R_TexValue val
     vkCreateSampler(g_vk.device, &ci, NULL, &g_vk.texture_samplers[tex]);
 }
 
-void renderer_generate_mipmap(void) {}
+void renderer_generate_mipmap(void) {
+    fprintf(stderr, "[renderer] UNIMPLEMENTED: %s\n", __func__);
+}
 
 void renderer_bind_image_texture(int unit, R_Texture texture, R_Access access) {
     (void)unit; (void)texture; (void)access;
+    fprintf(stderr, "[renderer] UNIMPLEMENTED: %s\n", __func__);
 }

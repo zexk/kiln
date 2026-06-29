@@ -73,41 +73,38 @@ VkPipelineLayout create_pipeline_layout(VkDescriptorSetLayout tex_layout) {
     return layout;
 }
 
-void get_pipeline_config(const char *vert_path, const char *frag_path, PipelineConfig *cfg) {
-    (void)frag_path;
+static const PipelineConfig k_default_cfg = {
+    .vformat            = VERTEX_FORMAT_TERRAIN,
+    .topology           = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    .depth_test_enable  = VK_TRUE,
+    .depth_write_enable = VK_TRUE,
+    .depth_compare      = VK_COMPARE_OP_LESS,
+    .cull_mode          = VK_CULL_MODE_BACK_BIT,
+    .blend_enable       = VK_FALSE,
+    .blend_src          = VK_BLEND_FACTOR_SRC_ALPHA,
+    .blend_dst          = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+    .has_texture        = true,
+    .depth_bias_enable  = VK_FALSE,
+    .push_constant_size = 256,
+};
 
-    *cfg = (PipelineConfig){
-        .vformat            = VERTEX_FORMAT_TERRAIN,
-        .topology           = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        .depth_test_enable  = VK_TRUE,
-        .depth_write_enable = VK_TRUE,
-        .depth_compare      = VK_COMPARE_OP_LESS,
-        .cull_mode          = VK_CULL_MODE_BACK_BIT,
-        .blend_enable       = VK_FALSE,
-        .blend_src          = VK_BLEND_FACTOR_SRC_ALPHA,
-        .blend_dst          = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-        .has_texture        = true,
-        .depth_bias_enable  = VK_FALSE,
-        .push_constant_size = 256,
-    };
+void get_pipeline_config(R_PipelineType type, const char *vert_path, PipelineConfig *cfg) {
+    *cfg = k_default_cfg;
 
-    if (strstr(vert_path, "skybox")) {
+    switch (type) {
+    case R_PIPELINE_TERRAIN: break;
+    case R_PIPELINE_VOXEL:
+        cfg->cull_mode = VK_CULL_MODE_NONE;
+        break;
+    case R_PIPELINE_SKYBOX:
         cfg->vformat            = VERTEX_FORMAT_SKYBOX;
         cfg->depth_write_enable = VK_FALSE;
         cfg->depth_compare      = VK_COMPARE_OP_LESS_OR_EQUAL;
         cfg->cull_mode          = VK_CULL_MODE_NONE;
         cfg->has_texture        = false;
         cfg->push_constant_size = 128;
-    } else if (strstr(vert_path, "basic") || strstr(vert_path, "voxel")) {
-        cfg->cull_mode = VK_CULL_MODE_NONE;
-    } else if (strstr(vert_path, "inv")) {
-        cfg->vformat            = VERTEX_FORMAT_ICON;
-        cfg->depth_test_enable  = VK_FALSE;
-        cfg->depth_write_enable = VK_FALSE;
-        cfg->cull_mode          = VK_CULL_MODE_NONE;
-        cfg->blend_enable       = VK_TRUE;
-        cfg->has_texture        = true;
-    } else if (strstr(vert_path, "outline")) {
+        break;
+    case R_PIPELINE_OUTLINE:
         cfg->vformat            = VERTEX_FORMAT_OUTLINE;
         cfg->topology           = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
         cfg->depth_write_enable = VK_FALSE;
@@ -115,18 +112,17 @@ void get_pipeline_config(const char *vert_path, const char *frag_path, PipelineC
         cfg->depth_bias_enable  = VK_TRUE;
         cfg->has_texture        = false;
         cfg->push_constant_size = 208;
-    } else if (strstr(vert_path, "hud")) {
-        /* Checked before "ui": kiln_ui_gl's HUD shaders live under src/ui/, so
-           their paths contain both substrings — the more specific one wins. */
+        break;
+    case R_PIPELINE_HUD:
         cfg->vformat            = VERTEX_FORMAT_HUD;
-        cfg->topology           = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         cfg->depth_test_enable  = VK_FALSE;
         cfg->depth_write_enable = VK_FALSE;
         cfg->cull_mode          = VK_CULL_MODE_NONE;
         cfg->blend_enable       = VK_TRUE;
         cfg->has_texture        = false;
         cfg->push_constant_size = 16;
-    } else if (strstr(vert_path, "ui")) {
+        break;
+    case R_PIPELINE_UI:
         cfg->vformat            = VERTEX_FORMAT_UI;
         cfg->depth_test_enable  = VK_FALSE;
         cfg->depth_write_enable = VK_FALSE;
@@ -134,6 +130,31 @@ void get_pipeline_config(const char *vert_path, const char *frag_path, PipelineC
         cfg->blend_enable       = VK_TRUE;
         cfg->has_texture        = true;
         cfg->push_constant_size = 8;
+        break;
+    case R_PIPELINE_ICON:
+        cfg->vformat            = VERTEX_FORMAT_ICON;
+        cfg->depth_test_enable  = VK_FALSE;
+        cfg->depth_write_enable = VK_FALSE;
+        cfg->cull_mode          = VK_CULL_MODE_NONE;
+        cfg->blend_enable       = VK_TRUE;
+        break;
+    case R_PIPELINE_AUTO:
+        /* Infer from shader path for backward compatibility. */
+        if (strstr(vert_path, "skybox"))
+            get_pipeline_config(R_PIPELINE_SKYBOX, vert_path, cfg);
+        else if (strstr(vert_path, "basic") || strstr(vert_path, "voxel"))
+            get_pipeline_config(R_PIPELINE_VOXEL, vert_path, cfg);
+        else if (strstr(vert_path, "inv"))
+            get_pipeline_config(R_PIPELINE_ICON, vert_path, cfg);
+        else if (strstr(vert_path, "outline"))
+            get_pipeline_config(R_PIPELINE_OUTLINE, vert_path, cfg);
+        else if (strstr(vert_path, "hud"))
+            /* hud checked before ui: HUD shaders live under src/ui/, so their
+               paths contain both substrings — the more specific one wins. */
+            get_pipeline_config(R_PIPELINE_HUD, vert_path, cfg);
+        else if (strstr(vert_path, "ui"))
+            get_pipeline_config(R_PIPELINE_UI, vert_path, cfg);
+        break;
     }
 }
 
@@ -291,7 +312,8 @@ VkPipeline create_graphics_pipeline(VkShaderModule vert, VkShaderModule frag,
  * Public API: programs / uniforms
  * ============================================================================ */
 
-R_Program renderer_create_program(const char *vert_path, const char *frag_path) {
+R_Program renderer_create_program_typed(const char *vert_path, const char *frag_path,
+                                         R_PipelineType type) {
     CHECK_DEVICE_RET(R_INVALID_HANDLE);
     if (g_vk.pipeline_count >= MAX_PIPELINES) return R_INVALID_HANDLE;
 
@@ -304,7 +326,7 @@ R_Program renderer_create_program(const char *vert_path, const char *frag_path) 
     }
 
     PipelineConfig cfg;
-    get_pipeline_config(vert_path, frag_path, &cfg);
+    get_pipeline_config(type, vert_path, &cfg);
 
     uint32_t idx  = g_vk.pipeline_count++;
     Pipeline *pipe = &g_vk.pipelines[idx];
@@ -338,8 +360,13 @@ R_Program renderer_create_program(const char *vert_path, const char *frag_path) 
     return idx;
 }
 
+R_Program renderer_create_program(const char *vert_path, const char *frag_path) {
+    return renderer_create_program_typed(vert_path, frag_path, R_PIPELINE_AUTO);
+}
+
 R_Program renderer_create_compute(const char *comp_path) {
     (void)comp_path;
+    fprintf(stderr, "[renderer] UNIMPLEMENTED: %s\n", __func__);
     return R_INVALID_HANDLE;
 }
 
@@ -445,8 +472,8 @@ void renderer_uniform_int(int loc, int value) {
 
 void renderer_uniform_ivec2(int loc, int x, int y) {
     if (loc < 0 || loc >= g_uniform_count) return;
-    int offset = g_uniforms[loc].offset;
-    if (offset + 8 > 256) return;
+    int offset = uniform_offset(loc);
+    if (offset < 0 || offset + 8 > 256) return;
     int v[2] = {x, y};
     memcpy(g_push_constants + offset, v, 8);
     g_push_dirty = true;

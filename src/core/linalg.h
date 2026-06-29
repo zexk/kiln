@@ -52,6 +52,9 @@ float kln_radians(float degrees);
 float kln_degrees(float radians);
 float kln_lerpf(float a, float b, float t);
 float kln_clampf(float x, float lo, float hi);
+static inline float kln_max3f(float a, float b, float c) {
+    return a > b ? (a > c ? a : c) : (b > c ? b : c);
+}
 
 /* --- vec2 --- */
 

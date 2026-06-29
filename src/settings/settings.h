@@ -17,6 +17,8 @@ typedef struct {
     float    bloom_threshold;
     float    bloom_strength;
     float    bloom_exposure;
+    float    fov;              /* vertical field of view, degrees */
+    float    mouse_sensitivity; /* radians per pixel for fly/FPS camera */
 } engine_settings_t;
 
 /* Maps a named game action to a physical key. */

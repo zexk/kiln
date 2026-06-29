@@ -895,8 +895,21 @@ static void build_ui(app_t *app) {
 
     bool prev_vsync = app->vsync;
     ui_checkbox(&app->ui, "vsync", &app->vsync);
-    if (app->vsync != prev_vsync) render_set_vsync(app->vsync);
+    if (app->vsync != prev_vsync) {
+        render_set_vsync(app->vsync);
+        app->settings.engine.vsync = app->vsync;
+        settings_save(&app->settings, SETTINGS_PATH);
+    }
     ui_slider_float(&app->ui, "fps limit", &app->fps_limit, 0.0f, 240.0f);
+    if (app->fps_limit < 1.0f)
+        ui_text(&app->ui, "  (unlimited)");
+    else
+        ui_text(&app->ui, "  target: %.0f fps", (double)app->fps_limit);
+    if (app->ui.went_up &&
+        app->fps_limit != app->settings.engine.fps_limit) {
+        app->settings.engine.fps_limit = app->fps_limit;
+        settings_save(&app->settings, SETTINGS_PATH);
+    }
     bool prev_wire = app->wireframe;
     ui_checkbox(&app->ui, "wireframe", &app->wireframe);
     if (app->wireframe != prev_wire) render_set_wireframe(app->wireframe);
@@ -1021,10 +1034,7 @@ static void build_ui(app_t *app) {
     ui_separator(&app->ui);
 
     /* --- controls (fly key bindings) --- */
-    if (app->fly_mode)
-        ui_text(&app->ui, "CONTROLS  (click to rebind)");
-    else
-        ui_text(&app->ui, "CONTROLS  (enter fly mode first)");
+    ui_text(&app->ui, "CONTROLS  (click row to rebind)");
 
     static const struct { const char *action; const char *label; } FLY_ACTIONS[] = {
         {"fly_forward",  "forward"},
@@ -1034,12 +1044,26 @@ static void build_ui(app_t *app) {
         {"fly_up",       "up"},
         {"fly_down",     "down"},
     };
+    bool bindings_changed = false;
     for (int i = 0; i < 6; i++) {
         int k = (int)settings_get_key(&app->settings, FLY_ACTIONS[i].action);
         if (ui_keybind(&app->ui, FLY_ACTIONS[i].label, &k, key_code_to_name((keycode_t)k))) {
             settings_set_key(&app->settings, FLY_ACTIONS[i].action, (keycode_t)k);
+            bindings_changed = true;
         }
     }
+    if (ui_button(&app->ui, "reset controls")) {
+        static const key_binding_t defaults[] = {
+            {"fly_forward",  KEY_W}, {"fly_backward", KEY_S},
+            {"fly_left",     KEY_A}, {"fly_right",    KEY_D},
+            {"fly_up",       KEY_E}, {"fly_down",     KEY_Q},
+        };
+        for (int i = 0; i < 6; i++)
+            settings_set_key(&app->settings, defaults[i].action, defaults[i].key);
+        bindings_changed = true;
+    }
+    if (bindings_changed)
+        settings_save(&app->settings, SETTINGS_PATH);
 
     ui_panel_end(&app->ui);
 

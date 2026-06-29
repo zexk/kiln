@@ -94,25 +94,44 @@ typedef struct {
     KvChunk *chunk;
     KvMesh   meshes[KV_LOD_LEVELS];
     bool     active;
-    bool     dirty;
+    bool     lod_valid[KV_LOD_LEVELS]; /* which LOD levels have uploaded meshes */
+    bool     lod_dirty[KV_LOD_LEVELS]; /* which LOD levels need a rebuild       */
     bool     save_dirty;
 } KvSlot;
+
+/* Hash table entry for O(1) chunk coordinate lookup. */
+typedef struct {
+    int32_t cx, cy, cz;
+    int32_t idx; /* -1 = empty, -2 = tombstone, >=0 = slot index */
+} KvHtEntry;
+
+/* Pending-load record used for distance-sorted streaming. */
+typedef struct {
+    int32_t cx, cy, cz;
+    int     dist;
+} KvPending;
 
 /* ── World (opaque externally) ───────────────────────────────────────────── */
 
 struct kv_world_t {
-    KvSlot  *slots;
-    int      cap;
-    int      count;
-    int      horiz_dist;
-    int      vert_radius;
-    kv_gen_fn gen;
-    void     *gen_ctx;
-    char      save_dir[256];
-    vec3_t    last_cam;
-    int32_t   last_cam_cx, last_cam_cy, last_cam_cz;
-    bool      has_pending_load;
-    R_Program shader;
-    int       loc_model, loc_view, loc_proj;
-    int       loc_fog_color, loc_fog_density, loc_texture;
+    KvSlot    *slots;
+    int        cap;
+    int        count;
+    int        horiz_dist;
+    int        vert_radius;
+    kv_gen_fn  gen;
+    void      *gen_ctx;
+    char       save_dir[256];
+    vec3_t     last_cam;
+    int32_t    last_cam_cx, last_cam_cy, last_cam_cz;
+    bool       has_pending_load;
+    R_Program  shader;
+    int        loc_model, loc_view, loc_proj;
+    int        loc_fog_color, loc_fog_density, loc_texture;
+    /* O(1) coordinate→slot lookup */
+    KvHtEntry *ht;
+    int        ht_cap;
+    int        ht_tomb; /* tombstone count; triggers rebuild when high */
+    /* scratch buffer for distance-sorted pending loads */
+    KvPending *pending_buf;
 };

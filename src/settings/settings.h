@@ -12,7 +12,11 @@ typedef struct {
     uint32_t width;
     uint32_t height;
     bool     vsync;
-    float    fps_limit; /* Hz; 0 = unlimited */
+    float    fps_limit;    /* Hz; 0 = unlimited */
+    bool     bloom;
+    float    bloom_threshold;
+    float    bloom_strength;
+    float    bloom_exposure;
 } engine_settings_t;
 
 /* Maps a named game action to a physical key. */

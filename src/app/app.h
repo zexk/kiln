@@ -124,6 +124,10 @@ typedef struct {
     bool  vsync;      /* mirrors the renderer present mode */
     float fps_limit;  /* Hz; 0 = unlimited */
     bool  wireframe;
+    bool  bloom;
+    float bloom_threshold;
+    float bloom_strength;
+    float bloom_exposure;
 
     /* directional light, set each frame from these spherical coordinates */
     float light_yaw;         /* degrees: horizontal rotation of the sun */

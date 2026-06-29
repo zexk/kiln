@@ -235,10 +235,16 @@ bool app_init(app_t *app) {
     gizmo_init(&app->gizmo);
     app->selected = ECS_ENTITY_NULL;
     app->sel_prototype = 0;
-    app->spin_speed = 0.6f;
-    app->vsync      = app->settings.engine.vsync;
-    app->fps_limit  = app->settings.engine.fps_limit;
+    app->spin_speed      = 0.6f;
+    app->vsync           = app->settings.engine.vsync;
+    app->fps_limit       = app->settings.engine.fps_limit;
+    app->bloom           = app->settings.engine.bloom;
+    app->bloom_threshold = app->settings.engine.bloom_threshold;
+    app->bloom_strength  = app->settings.engine.bloom_strength;
+    app->bloom_exposure  = app->settings.engine.bloom_exposure;
     render_set_vsync(app->vsync);
+    render_set_bloom(app->bloom, app->bloom_threshold,
+                     app->bloom_strength, app->bloom_exposure);
     app->bg_color[0] = 0.02f;
     app->bg_color[1] = 0.02f;
     app->bg_color[2] = 0.05f;
@@ -929,6 +935,38 @@ static void build_ui(app_t *app) {
             app->settings.engine.fps_limit = app->fps_limit;
             settings_save(&app->settings, app->settings_path);
         }
+
+        /* bloom */
+        {
+            bool prev_bloom      = app->bloom;
+            float prev_threshold = app->bloom_threshold;
+            float prev_strength  = app->bloom_strength;
+            float prev_exposure  = app->bloom_exposure;
+
+            ui_checkbox(&app->ui, "bloom", &app->bloom);
+            if (app->bloom) {
+                ui_slider_float(&app->ui, "threshold", &app->bloom_threshold, 0.0f, 2.0f);
+                ui_slider_float(&app->ui, "strength",  &app->bloom_strength,  0.0f, 2.0f);
+                ui_slider_float(&app->ui, "exposure",  &app->bloom_exposure,  0.1f, 4.0f);
+            }
+
+            bool bloom_changed = app->bloom != prev_bloom;
+            if (app->ui.went_up && (app->bloom_threshold != prev_threshold ||
+                                    app->bloom_strength  != prev_strength  ||
+                                    app->bloom_exposure  != prev_exposure)) {
+                bloom_changed = true;
+            }
+            if (bloom_changed) {
+                render_set_bloom(app->bloom, app->bloom_threshold,
+                                 app->bloom_strength, app->bloom_exposure);
+                app->settings.engine.bloom           = app->bloom;
+                app->settings.engine.bloom_threshold = app->bloom_threshold;
+                app->settings.engine.bloom_strength  = app->bloom_strength;
+                app->settings.engine.bloom_exposure  = app->bloom_exposure;
+                settings_save(&app->settings, app->settings_path);
+            }
+        }
+
         bool prev_wire = app->wireframe;
         ui_checkbox(&app->ui, "wireframe", &app->wireframe);
         if (app->wireframe != prev_wire) render_set_wireframe(app->wireframe);
@@ -1490,10 +1528,14 @@ void app_shutdown(app_t *app) {
     /* Persist live graphical state so the next launch picks it up. */
     uint32_t sw, sh;
     window_size(app->window, &sw, &sh);
-    app->settings.engine.width     = sw;
-    app->settings.engine.height    = sh;
-    app->settings.engine.vsync     = app->vsync;
-    app->settings.engine.fps_limit = app->fps_limit;
+    app->settings.engine.width          = sw;
+    app->settings.engine.height         = sh;
+    app->settings.engine.vsync          = app->vsync;
+    app->settings.engine.fps_limit      = app->fps_limit;
+    app->settings.engine.bloom          = app->bloom;
+    app->settings.engine.bloom_threshold = app->bloom_threshold;
+    app->settings.engine.bloom_strength  = app->bloom_strength;
+    app->settings.engine.bloom_exposure  = app->bloom_exposure;
     settings_save(&app->settings, app->settings_path);
 
     render_shutdown();

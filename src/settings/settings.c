@@ -80,10 +80,14 @@ void settings_set_key(settings_t *s, const char *action, keycode_t key) {
 
 void settings_init(settings_t *s,
                    const key_binding_t *default_bindings, int n) {
-    s->engine.width     = 1280;
-    s->engine.height    = 720;
-    s->engine.vsync     = true;
-    s->engine.fps_limit = 0.0f;
+    s->engine.width          = 1280;
+    s->engine.height         = 720;
+    s->engine.vsync          = true;
+    s->engine.fps_limit      = 0.0f;
+    s->engine.bloom          = true;
+    s->engine.bloom_threshold = 0.8f;
+    s->engine.bloom_strength  = 0.5f;
+    s->engine.bloom_exposure  = 1.0f;
 
     s->bindings.count = 0;
     for (int i = 0; i < n && i < SETTINGS_MAX_BINDINGS; i++) {
@@ -137,10 +141,14 @@ static void parse_line(settings_t *s, section_t *sec, char *line) {
     const char *val = trim_left(eq + 1);
 
     if (*sec == SEC_ENGINE) {
-        if (strcmp(key, "width")     == 0) s->engine.width     = (uint32_t)atoi(val);
-        else if (strcmp(key, "height")    == 0) s->engine.height    = (uint32_t)atoi(val);
-        else if (strcmp(key, "vsync")     == 0) s->engine.vsync     = atoi(val) != 0;
-        else if (strcmp(key, "fps_limit") == 0) s->engine.fps_limit = (float)atof(val);
+        if      (strcmp(key, "width")          == 0) s->engine.width          = (uint32_t)atoi(val);
+        else if (strcmp(key, "height")         == 0) s->engine.height         = (uint32_t)atoi(val);
+        else if (strcmp(key, "vsync")          == 0) s->engine.vsync          = atoi(val) != 0;
+        else if (strcmp(key, "fps_limit")      == 0) s->engine.fps_limit      = (float)atof(val);
+        else if (strcmp(key, "bloom")          == 0) s->engine.bloom          = atoi(val) != 0;
+        else if (strcmp(key, "bloom_threshold")== 0) s->engine.bloom_threshold= (float)atof(val);
+        else if (strcmp(key, "bloom_strength") == 0) s->engine.bloom_strength = (float)atof(val);
+        else if (strcmp(key, "bloom_exposure") == 0) s->engine.bloom_exposure = (float)atof(val);
     } else if (*sec == SEC_BINDINGS) {
         settings_set_key(s, key, key_name_to_code(val));
     }
@@ -179,10 +187,14 @@ static bool write_fn(FILE *f, void *ctx) {
     const settings_t *s = ctx;
 
     fprintf(f, "[engine]\n");
-    fprintf(f, "width=%u\n",     s->engine.width);
-    fprintf(f, "height=%u\n",    s->engine.height);
-    fprintf(f, "vsync=%d\n",     s->engine.vsync ? 1 : 0);
-    fprintf(f, "fps_limit=%g\n", (double)s->engine.fps_limit);
+    fprintf(f, "width=%u\n",          s->engine.width);
+    fprintf(f, "height=%u\n",         s->engine.height);
+    fprintf(f, "vsync=%d\n",          s->engine.vsync ? 1 : 0);
+    fprintf(f, "fps_limit=%g\n",      (double)s->engine.fps_limit);
+    fprintf(f, "bloom=%d\n",          s->engine.bloom ? 1 : 0);
+    fprintf(f, "bloom_threshold=%g\n",(double)s->engine.bloom_threshold);
+    fprintf(f, "bloom_strength=%g\n", (double)s->engine.bloom_strength);
+    fprintf(f, "bloom_exposure=%g\n", (double)s->engine.bloom_exposure);
 
     if (s->bindings.count > 0) {
         fprintf(f, "\n[bindings]\n");

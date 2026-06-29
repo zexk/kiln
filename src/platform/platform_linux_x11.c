@@ -325,6 +325,19 @@ platform_native_handles_t window_get_native_handles(const window_t *w) {
                                         .window  = (unsigned long)w->handle };
 }
 
+char *platform_data_dir(const char *appname) {
+    const char *base = getenv("XDG_DATA_HOME");
+    char path[4096];
+    if (base && base[0]) {
+        snprintf(path, sizeof(path), "%s/%s", base, appname);
+    } else {
+        const char *home = getenv("HOME");
+        if (!home || !home[0]) return NULL;
+        snprintf(path, sizeof(path), "%s/.local/share/%s", home, appname);
+    }
+    return strdup(path);
+}
+
 char *platform_resolve_path(const char *path) {
     if (path && path[0] == '/') return strdup(path); /* absolute — pass through */
 

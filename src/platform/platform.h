@@ -111,3 +111,12 @@ platform_native_handles_t window_get_native_handles(const window_t *window);
 /* Return a heap-allocated absolute path to `path` resolved relative to the
    directory that contains the running executable. Caller must free(). */
 char *platform_resolve_path(const char *path);
+
+/* Return a heap-allocated path to the platform-conventional per-user data
+   directory for appname:
+     Linux:   $XDG_DATA_HOME/<appname>  or  ~/.local/share/<appname>
+     Windows: %APPDATA%\<appname>
+   Does NOT create the directory — call fs_mkdirs() on the result if needed.
+   Returns NULL if the home/data directory cannot be determined.
+   Caller must free(). */
+char *platform_data_dir(const char *appname);

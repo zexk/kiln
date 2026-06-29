@@ -444,6 +444,15 @@ platform_native_handles_t window_get_native_handles(const window_t *w) {
    Path resolution
    ------------------------------------------------------------------------- */
 
+char *platform_data_dir(const char *appname) {
+    const char *appdata = getenv("APPDATA");
+    if (!appdata || !appdata[0]) return NULL;
+    size_t n = strlen(appdata) + 1 + strlen(appname) + 1;
+    char *out = malloc(n);
+    if (out) snprintf(out, n, "%s\\%s", appdata, appname);
+    return out;
+}
+
 char *platform_resolve_path(const char *path) {
     /* Absolute paths (rooted drive letter or UNC) — pass through unchanged. */
     if (path && (path[0] == '/' || path[0] == '\\' || (path[0] && path[1] == ':')))

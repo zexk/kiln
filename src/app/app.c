@@ -13,6 +13,7 @@
 #include "kmesh.h"
 #include "scene.h"
 
+#include "fs.h"
 #include "settings.h"
 #include "timer.h"
 
@@ -22,8 +23,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-static const char *SETTINGS_PATH = "settings.ini";
 
 /* Where models/textures live, resolved at runtime (env override, else the
    installed share/kiln/assets, else the build-time source dir). */
@@ -184,6 +183,23 @@ static void build_scene(app_t *app) {
 bool app_init(app_t *app) {
     core_init();
 
+    /* Build per-user data paths; fall back to CWD if platform lookup fails. */
+    {
+        char *data = platform_data_dir("kiln");
+        if (data) {
+            fs_mkdirs(data);
+            fs_path_join(app->settings_path, sizeof(app->settings_path),
+                         data, "settings.ini");
+            fs_path_join(app->scene_path,    sizeof(app->scene_path),
+                         data, "scene.kscn");
+            free(data);
+        } else {
+            snprintf(app->settings_path, sizeof(app->settings_path),
+                     "settings.ini");
+            snprintf(app->scene_path, sizeof(app->scene_path), "scene.kscn");
+        }
+    }
+
     static const key_binding_t fly_defaults[] = {
         {"fly_forward",  KEY_W},
         {"fly_backward", KEY_S},
@@ -194,7 +210,7 @@ bool app_init(app_t *app) {
     };
     settings_init(&app->settings, fly_defaults,
                   (int)(sizeof(fly_defaults) / sizeof(fly_defaults[0])));
-    settings_load(&app->settings, SETTINGS_PATH);
+    settings_load(&app->settings, app->settings_path);
 
     app->world = world_create();
     app->transform_id = component_register(app->world, "transform",
@@ -775,7 +791,6 @@ static void run_pick_selftest(app_t *app) {
            total, corner_miss ? "OK" : "FAIL");
 }
 
-static const char *SCENE_PATH = "scene.kscn";
 
 /* Serialize every renderable entity to a scene file. */
 static void scene_do_save(app_t *app) {
@@ -798,7 +813,7 @@ static void scene_do_save(app_t *app) {
         e->scale = t->scale;
     }
 
-    if (scene_save(SCENE_PATH, buf, count)) {
+    if (scene_save(app->scene_path, buf, count)) {
         snprintf(app->scene_status, sizeof(app->scene_status),
                  "SAVED %d ENTITIES", count);
     } else {
@@ -809,7 +824,7 @@ static void scene_do_save(app_t *app) {
 /* Replace the live scene with the contents of the scene file. */
 static void scene_do_load(app_t *app) {
     scene_entity_t buf[256];
-    int count = scene_load(SCENE_PATH, buf, (int)(sizeof(buf) / sizeof(buf[0])));
+    int count = scene_load(app->scene_path, buf, (int)(sizeof(buf) / sizeof(buf[0])));
     if (count < 0) {
         snprintf(app->scene_status, sizeof(app->scene_status), "LOAD FAILED");
         return;
@@ -902,7 +917,7 @@ static void build_ui(app_t *app) {
         if (app->vsync != prev_vsync) {
             render_set_vsync(app->vsync);
             app->settings.engine.vsync = app->vsync;
-            settings_save(&app->settings, SETTINGS_PATH);
+            settings_save(&app->settings, app->settings_path);
         }
         ui_slider_float(&app->ui, "fps limit", &app->fps_limit, 0.0f, 240.0f);
         if (app->fps_limit < 1.0f)
@@ -912,7 +927,7 @@ static void build_ui(app_t *app) {
         if (app->ui.went_up &&
             app->fps_limit != app->settings.engine.fps_limit) {
             app->settings.engine.fps_limit = app->fps_limit;
-            settings_save(&app->settings, SETTINGS_PATH);
+            settings_save(&app->settings, app->settings_path);
         }
         bool prev_wire = app->wireframe;
         ui_checkbox(&app->ui, "wireframe", &app->wireframe);
@@ -1067,7 +1082,7 @@ static void build_ui(app_t *app) {
             bindings_changed = true;
         }
         if (bindings_changed)
-            settings_save(&app->settings, SETTINGS_PATH);
+            settings_save(&app->settings, app->settings_path);
     }
 
     ui_panel_end(&app->ui);
@@ -1479,7 +1494,7 @@ void app_shutdown(app_t *app) {
     app->settings.engine.height    = sh;
     app->settings.engine.vsync     = app->vsync;
     app->settings.engine.fps_limit = app->fps_limit;
-    settings_save(&app->settings, SETTINGS_PATH);
+    settings_save(&app->settings, app->settings_path);
 
     render_shutdown();
     window_destroy(app->window);

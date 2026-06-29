@@ -76,6 +76,8 @@ typedef struct {
  * here as subsystems come online, keeping main.c a thin entry point. */
 typedef struct {
     settings_t settings;
+    char settings_path[512];
+    char scene_path[512];
 
     window_t *window;
     world_t *world;

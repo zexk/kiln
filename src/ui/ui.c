@@ -354,6 +354,13 @@ bool ui_drag_float(ui_t *ui, const char *label, float *value, float speed) {
     return changed;
 }
 
+bool ui_collapsible(ui_t *ui, const char *label, bool *open) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%s %s", *open ? "v" : ">", label);
+    if (ui_button(ui, buf)) *open = !*open;
+    return *open;
+}
+
 bool ui_keybind(ui_t *ui, const char *label, int *key, const char *key_name) {
     int id = ++ui->id_counter;
     float x, y, w, h;

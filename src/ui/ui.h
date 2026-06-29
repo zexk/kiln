@@ -99,6 +99,12 @@ bool ui_selectable(ui_t *ui, const char *label, bool selected);
    `speed` units per pixel.  Returns true every frame the value changes. */
 bool ui_drag_float(ui_t *ui, const char *label, float *value, float speed);
 
+/* Collapsible section header: draws a toggle button "v LABEL" / "> LABEL".
+   Flips *open on click and returns the new state.  Caller gates content:
+     if (ui_collapsible(ui, "My Section", &open)) { ... widgets ... }
+   When closed, omitted widgets don't advance the cursor — correct behaviour. */
+bool ui_collapsible(ui_t *ui, const char *label, bool *open);
+
 /* Key-binding widget: shows "label: key_name". Click to enter rebind mode
    (shows "label: [press key...]"), then press any key to set *key to the new
    value.  key_name is typically key_code_to_name(*key) from settings.h.

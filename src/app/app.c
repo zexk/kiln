@@ -886,6 +886,7 @@ static void build_ui(app_t *app) {
     ui_begin(&app->ui, &in, (float)w, (float)h, &g_kln_ui_draw);
     ui_panel_begin(&app->ui, 12.0f, 12.0f, 300.0f);
 
+    /* perf stats — always visible */
     float target_ms = app->fps_limit > 0.0f
                       ? 1000.0f / app->fps_limit : 1000.0f / 60.0f;
     ui_graph(&app->ui, "frame ms",
@@ -893,177 +894,181 @@ static void build_ui(app_t *app) {
              50.0f, target_ms);
     ui_text(&app->ui, "%.0f fps  draws %u", (double)app->fps, app->draw_count);
 
-    bool prev_vsync = app->vsync;
-    ui_checkbox(&app->ui, "vsync", &app->vsync);
-    if (app->vsync != prev_vsync) {
-        render_set_vsync(app->vsync);
-        app->settings.engine.vsync = app->vsync;
-        settings_save(&app->settings, SETTINGS_PATH);
-    }
-    ui_slider_float(&app->ui, "fps limit", &app->fps_limit, 0.0f, 240.0f);
-    if (app->fps_limit < 1.0f)
-        ui_text(&app->ui, "  (unlimited)");
-    else
-        ui_text(&app->ui, "  target: %.0f fps", (double)app->fps_limit);
-    if (app->ui.went_up &&
-        app->fps_limit != app->settings.engine.fps_limit) {
-        app->settings.engine.fps_limit = app->fps_limit;
-        settings_save(&app->settings, SETTINGS_PATH);
-    }
-    bool prev_wire = app->wireframe;
-    ui_checkbox(&app->ui, "wireframe", &app->wireframe);
-    if (app->wireframe != prev_wire) render_set_wireframe(app->wireframe);
-    ui_checkbox(&app->ui, "grid", &app->show_grid);
-    if (app->fly_mode) {
-        ui_text(&app->ui, "FLY MODE  (TAB to exit)");
-        ui_text(&app->ui, "pos  %.1f %.1f %.1f",
-                (double)app->fly_pos.x, (double)app->fly_pos.y,
-                (double)app->fly_pos.z);
-    } else {
-        ui_text(&app->ui, "cam  y%.0f p%.0f d%.1f",
-                (double)kln_degrees(app->camera.yaw),
-                (double)kln_degrees(app->camera.pitch),
-                (double)app->camera.distance);
-    }
-
-    ui_separator(&app->ui);
-
-    ui_checkbox(&app->ui, "auto rotate", &app->auto_rotate);
-    ui_slider_float(&app->ui, "spin", &app->spin_speed, 0.0f, 3.0f);
-    ui_slider_float(&app->ui, "bg r", &app->bg_color[0], 0.0f, 1.0f);
-    ui_slider_float(&app->ui, "bg g", &app->bg_color[1], 0.0f, 1.0f);
-    ui_slider_float(&app->ui, "bg b", &app->bg_color[2], 0.0f, 1.0f);
-    if (ui_button(&app->ui, "reset camera")) {
-        camera_init(&app->camera);
-        app->camera.distance = 16.0f;
-        app->camera.pitch = kln_radians(18.0f);
-    }
-
-    ui_separator(&app->ui);
-
-    ui_slider_float(&app->ui, "sun yaw",   &app->light_yaw,        0.0f, 360.0f);
-    ui_slider_float(&app->ui, "sun pitch", &app->light_pitch,       0.0f,  90.0f);
-    ui_slider_float(&app->ui, "light",     &app->light_intensity,   0.0f,   2.0f);
-    ui_slider_float(&app->ui, "ambient",   &app->ambient_intensity, 0.0f,   2.0f);
-
-    ui_separator(&app->ui);
-
-    /* --- crude level editor: add / select / remove --- */
-    if (app->selected != ECS_ENTITY_NULL &&
-        !entity_is_alive(app->world, app->selected)) {
-        app->selected = ECS_ENTITY_NULL;
-    }
-    entity_t ents[256];
-    int ecount = collect_entities(app, ents, 256);
-
-    ui_progress(&app->ui, "entities", (float)ecount, 256.0f);
-    if (app->prototype_count > 0) {
-        ui_text(&app->ui, "spawn: %s",
-                app->prototypes[app->sel_prototype].name);
-        if (ui_button(&app->ui, "cycle mesh")) {
-            app->sel_prototype =
-                (app->sel_prototype + 1) % app->prototype_count;
+    /* --- SETTINGS section --- */
+    static bool sec_settings = true;
+    if (ui_collapsible(&app->ui, "SETTINGS", &sec_settings)) {
+        bool prev_vsync = app->vsync;
+        ui_checkbox(&app->ui, "vsync", &app->vsync);
+        if (app->vsync != prev_vsync) {
+            render_set_vsync(app->vsync);
+            app->settings.engine.vsync = app->vsync;
+            settings_save(&app->settings, SETTINGS_PATH);
         }
-        /* Spawn at the orbit target — pan the camera to place where it lands. */
-        if (ui_button(&app->ui, "add at target")) {
-            entity_t e = spawn(app, app->sel_prototype, app->camera.target);
-            if (e != ECS_ENTITY_NULL) {
-                app->selected = e;
-                transform_t *t =
-                    entity_get_component(app->world, e, app->transform_id);
-                history_push(&app->history, (cmd_t){
-                    .type  = CMD_SPAWN,
-                    .entity = e,
-                    .proto = app->sel_prototype,
-                    .xform = {t->position, t->rotation, t->scale},
-                });
+        ui_slider_float(&app->ui, "fps limit", &app->fps_limit, 0.0f, 240.0f);
+        if (app->fps_limit < 1.0f)
+            ui_text(&app->ui, "  (unlimited)");
+        else
+            ui_text(&app->ui, "  target: %.0f fps", (double)app->fps_limit);
+        if (app->ui.went_up &&
+            app->fps_limit != app->settings.engine.fps_limit) {
+            app->settings.engine.fps_limit = app->fps_limit;
+            settings_save(&app->settings, SETTINGS_PATH);
+        }
+        bool prev_wire = app->wireframe;
+        ui_checkbox(&app->ui, "wireframe", &app->wireframe);
+        if (app->wireframe != prev_wire) render_set_wireframe(app->wireframe);
+        ui_checkbox(&app->ui, "grid", &app->show_grid);
+        if (app->fly_mode) {
+            ui_text(&app->ui, "FLY MODE  (TAB to exit)");
+            ui_text(&app->ui, "pos  %.1f %.1f %.1f",
+                    (double)app->fly_pos.x, (double)app->fly_pos.y,
+                    (double)app->fly_pos.z);
+        } else {
+            ui_text(&app->ui, "cam  y%.0f p%.0f d%.1f",
+                    (double)kln_degrees(app->camera.yaw),
+                    (double)kln_degrees(app->camera.pitch),
+                    (double)app->camera.distance);
+        }
+    }
+
+    /* --- SCENE section --- */
+    static bool sec_scene = true;
+    if (ui_collapsible(&app->ui, "SCENE", &sec_scene)) {
+        ui_checkbox(&app->ui, "auto rotate", &app->auto_rotate);
+        ui_slider_float(&app->ui, "spin", &app->spin_speed, 0.0f, 3.0f);
+        ui_slider_float(&app->ui, "bg r", &app->bg_color[0], 0.0f, 1.0f);
+        ui_slider_float(&app->ui, "bg g", &app->bg_color[1], 0.0f, 1.0f);
+        ui_slider_float(&app->ui, "bg b", &app->bg_color[2], 0.0f, 1.0f);
+        if (ui_button(&app->ui, "reset camera")) {
+            camera_init(&app->camera);
+            app->camera.distance = 16.0f;
+            app->camera.pitch = kln_radians(18.0f);
+        }
+        ui_slider_float(&app->ui, "sun yaw",   &app->light_yaw,        0.0f, 360.0f);
+        ui_slider_float(&app->ui, "sun pitch", &app->light_pitch,       0.0f,  90.0f);
+        ui_slider_float(&app->ui, "light",     &app->light_intensity,   0.0f,   2.0f);
+        ui_slider_float(&app->ui, "ambient",   &app->ambient_intensity, 0.0f,   2.0f);
+    }
+
+    /* --- EDITOR section --- */
+    static bool sec_editor = true;
+    if (ui_collapsible(&app->ui, "EDITOR", &sec_editor)) {
+        if (app->selected != ECS_ENTITY_NULL &&
+            !entity_is_alive(app->world, app->selected)) {
+            app->selected = ECS_ENTITY_NULL;
+        }
+        entity_t ents[256];
+        int ecount = collect_entities(app, ents, 256);
+
+        ui_progress(&app->ui, "entities", (float)ecount, 256.0f);
+        if (app->prototype_count > 0) {
+            ui_text(&app->ui, "spawn: %s",
+                    app->prototypes[app->sel_prototype].name);
+            if (ui_button(&app->ui, "cycle mesh")) {
+                app->sel_prototype =
+                    (app->sel_prototype + 1) % app->prototype_count;
+            }
+            if (ui_button(&app->ui, "add at target")) {
+                entity_t e = spawn(app, app->sel_prototype, app->camera.target);
+                if (e != ECS_ENTITY_NULL) {
+                    app->selected = e;
+                    transform_t *t =
+                        entity_get_component(app->world, e, app->transform_id);
+                    history_push(&app->history, (cmd_t){
+                        .type  = CMD_SPAWN,
+                        .entity = e,
+                        .proto = app->sel_prototype,
+                        .xform = {t->position, t->rotation, t->scale},
+                    });
+                }
             }
         }
-    }
 
-    ui_text(&app->ui, "sel: %s", selected_name(app));
-    if (app->selected != ECS_ENTITY_NULL) {
-        static const char *modes[] = {"move", "rotate", "scale"};
-        char label[32];
-        snprintf(label, sizeof(label), "gizmo: %s", modes[app->gizmo.mode]);
-        if (ui_button(&app->ui, label)) {
-            app->gizmo.mode = (gizmo_mode_t)(((int)app->gizmo.mode + 1) % 3);
-        }
-    }
-    if (ui_button(&app->ui, "select next") && ecount > 0) {
-        int cur = -1;
-        for (int i = 0; i < ecount; i++) {
-            if (ents[i] == app->selected) {
-                cur = i;
-                break;
+        ui_text(&app->ui, "sel: %s", selected_name(app));
+        if (app->selected != ECS_ENTITY_NULL) {
+            static const char *modes[] = {"move", "rotate", "scale"};
+            char label[32];
+            snprintf(label, sizeof(label), "gizmo: %s", modes[app->gizmo.mode]);
+            if (ui_button(&app->ui, label)) {
+                app->gizmo.mode = (gizmo_mode_t)(((int)app->gizmo.mode + 1) % 3);
             }
         }
-        app->selected = ents[(cur + 1) % ecount];
-    }
-    if (ui_button(&app->ui, "remove") &&
-        app->selected != ECS_ENTITY_NULL) {
-        entity_t dying = app->selected;
-        transform_t *dt = entity_get_component(app->world, dying, app->transform_id);
-        renderable_t *dr = entity_get_component(app->world, dying, app->renderable_id);
-        if (dt && dr) {
-            prototype_t *p = prototype_for_mesh(app, dr->mesh);
-            if (p)
-                history_push(&app->history, (cmd_t){
-                    .type  = CMD_DELETE,
-                    .entity = dying,
-                    .proto = (int)(p - app->prototypes),
-                    .xform = {dt->position, dt->rotation, dt->scale},
-                });
+        if (ui_button(&app->ui, "select next") && ecount > 0) {
+            int cur = -1;
+            for (int i = 0; i < ecount; i++) {
+                if (ents[i] == app->selected) { cur = i; break; }
+            }
+            app->selected = ents[(cur + 1) % ecount];
         }
-        entity_destroy(app->world, dying);
-        app->selected = ECS_ENTITY_NULL;
+        if (ui_button(&app->ui, "remove") &&
+            app->selected != ECS_ENTITY_NULL) {
+            entity_t dying = app->selected;
+            transform_t *dt = entity_get_component(app->world, dying, app->transform_id);
+            renderable_t *dr = entity_get_component(app->world, dying, app->renderable_id);
+            if (dt && dr) {
+                prototype_t *p = prototype_for_mesh(app, dr->mesh);
+                if (p)
+                    history_push(&app->history, (cmd_t){
+                        .type  = CMD_DELETE,
+                        .entity = dying,
+                        .proto = (int)(p - app->prototypes),
+                        .xform = {dt->position, dt->rotation, dt->scale},
+                    });
+            }
+            entity_destroy(app->world, dying);
+            app->selected = ECS_ENTITY_NULL;
+        }
+
+        if (ui_button(&app->ui, "undo (C-z)")) history_undo(app);
+        if (ui_button(&app->ui, "redo (C-y)")) history_redo(app);
+
+        if (ui_button(&app->ui, "save scene")) { scene_do_save(app); }
+        if (ui_button(&app->ui, "load scene")) { scene_do_load(app); }
+        if (app->scene_status[0]) {
+            ui_text(&app->ui, "%s", app->scene_status);
+            app->scene_status[0] = '\0';
+        }
     }
 
-    if (ui_button(&app->ui, "undo (C-z)")) history_undo(app);
-    if (ui_button(&app->ui, "redo (C-y)")) history_redo(app);
-
-    ui_separator(&app->ui);
-
-    if (ui_button(&app->ui, "save scene")) { scene_do_save(app); }
-    if (ui_button(&app->ui, "load scene")) { scene_do_load(app); }
-    if (app->scene_status[0]) {
-        ui_text(&app->ui, "%s", app->scene_status);
-        app->scene_status[0] = '\0';
-    }
-
-    ui_separator(&app->ui);
-
-    /* --- controls (fly key bindings) --- */
-    ui_text(&app->ui, "CONTROLS  (click row to rebind)");
-
-    static const struct { const char *action; const char *label; } FLY_ACTIONS[] = {
-        {"fly_forward",  "forward"},
-        {"fly_backward", "backward"},
-        {"fly_left",     "left"},
-        {"fly_right",    "right"},
-        {"fly_up",       "up"},
-        {"fly_down",     "down"},
-    };
-    bool bindings_changed = false;
-    for (int i = 0; i < 6; i++) {
-        int k = (int)settings_get_key(&app->settings, FLY_ACTIONS[i].action);
-        if (ui_keybind(&app->ui, FLY_ACTIONS[i].label, &k, key_code_to_name((keycode_t)k))) {
-            settings_set_key(&app->settings, FLY_ACTIONS[i].action, (keycode_t)k);
+    /* --- CONTROLS section --- */
+    static bool sec_controls = false;
+    if (ui_collapsible(&app->ui, "CONTROLS", &sec_controls)) {
+        ui_text(&app->ui, "(click row to rebind)");
+        static const struct {
+            const char *action;
+            const char *label;
+        } FLY_ACTIONS[] = {
+            {"fly_forward",  "forward"},
+            {"fly_backward", "backward"},
+            {"fly_left",     "left"},
+            {"fly_right",    "right"},
+            {"fly_up",       "up"},
+            {"fly_down",     "down"},
+        };
+        bool bindings_changed = false;
+        for (int i = 0; i < 6; i++) {
+            int k = (int)settings_get_key(&app->settings, FLY_ACTIONS[i].action);
+            if (ui_keybind(&app->ui, FLY_ACTIONS[i].label, &k,
+                           key_code_to_name((keycode_t)k))) {
+                settings_set_key(&app->settings, FLY_ACTIONS[i].action,
+                                 (keycode_t)k);
+                bindings_changed = true;
+            }
+        }
+        if (ui_button(&app->ui, "reset controls")) {
+            static const key_binding_t defaults[] = {
+                {"fly_forward",  KEY_W}, {"fly_backward", KEY_S},
+                {"fly_left",     KEY_A}, {"fly_right",    KEY_D},
+                {"fly_up",       KEY_E}, {"fly_down",     KEY_Q},
+            };
+            for (int i = 0; i < 6; i++)
+                settings_set_key(&app->settings, defaults[i].action,
+                                 defaults[i].key);
             bindings_changed = true;
         }
+        if (bindings_changed)
+            settings_save(&app->settings, SETTINGS_PATH);
     }
-    if (ui_button(&app->ui, "reset controls")) {
-        static const key_binding_t defaults[] = {
-            {"fly_forward",  KEY_W}, {"fly_backward", KEY_S},
-            {"fly_left",     KEY_A}, {"fly_right",    KEY_D},
-            {"fly_up",       KEY_E}, {"fly_down",     KEY_Q},
-        };
-        for (int i = 0; i < 6; i++)
-            settings_set_key(&app->settings, defaults[i].action, defaults[i].key);
-        bindings_changed = true;
-    }
-    if (bindings_changed)
-        settings_save(&app->settings, SETTINGS_PATH);
 
     ui_panel_end(&app->ui);
 

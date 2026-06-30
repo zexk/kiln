@@ -49,11 +49,11 @@ Adding a new shader: add the filename to the `foreach` list in `src/render/CMake
 
 Kiln is a C99 game engine targeting Linux/X11 with a Vulkan renderer. Libraries are always built; executables and tests only build when kiln is the top-level CMake project (guarded by `CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME`), so downstream games that include kiln as a subdirectory only pay for the libs.
 
-**Two renderer layers exist in `src/render/`:**
+**Two renderer APIs over one shared Vulkan context (`src/render/`):**
 - `render.h` / `render_vk.c` — high-level scene renderer: uploads meshes/textures/materials as opaque handles, queues draw calls per frame, drives the full pipeline (HDR offscreen, cascaded shadow maps, bloom, skybox, GPU particles). This is what `app/` and demos use.
-- `renderer.h` / `r_*.c` — low-level abstract renderer: thin Vulkan wrappers around programs, buffers, VAOs, and textures (ported from Kyub). Unused by the high-level layer; available for lower-level demos.
+- `renderer.h` / `r_*.c` — low-level abstract renderer: thin Vulkan wrappers around programs, buffers, VAOs, and textures (ported from Kyub). Both layers share a single `g_vk` context (`render_internal.h`); the thin renderer records into the rich renderer's frame via an overlay hook (`renderer_set_overlay_fn`). Used by `voxel/`, `ui/` (hud), `texture/`, and the `app/` overlay.
 
-**UI** (`src/ui/`): `kiln_ui` (`ui.h`) is a backend-agnostic immediate-mode widget set — the caller supplies a `ui_draw_t` rect/text vtable (the editor routes it through `render.h`). `kiln_ui_gl` (`ui_gl.h`) is the ready-made backend for the low-level renderer: batched screen-space rects, bitmap text (via `kiln_font8x8`) and buttons, plus `ui_gl_draw()` which hands `kiln_ui` a vtable. It ships and compiles its own HUD shaders (located via `$KILN_UI_SHADER_DIR`).
+**UI** (`src/ui/`): `kiln_ui` (`ui.h`) is a backend-agnostic immediate-mode widget set — the caller supplies a `ui_draw_t` rect/text vtable (the editor routes it through the hud backend). `hud.h` is the ready-made backend on the low-level renderer: batched screen-space rects, bitmap text (via `kiln_font8x8`, one quad per lit glyph pixel — no atlas) and buttons, plus `hud_draw()` which hands `kiln_ui` a `ui_draw_t` vtable. It ships and compiles its own HUD shaders (located via `$KILN_UI_SHADER_DIR`).
 
 **Texture** (`src/texture/`): `kiln_texture` (`texture.h`) builds layered/array textures from image files — a deduplicating builder (`texture_array_add`/`texture_array_load`) plus a one-shot `texture_array_load_paths`. Decoding goes through `kiln_assets`' `image_load`.
 
@@ -77,6 +77,7 @@ Kiln is a C99 game engine targeting Linux/X11 with a Vulkan renderer. Libraries 
 | Variable | Purpose |
 |---|---|
 | `KILN_SHADER_DIR` | Override compiled `.spv` search path |
+| `KILN_UI_SHADER_DIR` | Override compiled HUD `.spv` search path |
 | `KILN_ASSET_DIR` | Override asset root |
 
 ## Using kiln as a library

@@ -10,6 +10,12 @@ Kyub (the voxel game built on it) lives at [zexk/kyub](https://github.com/zexk/k
 
 **ecs**: archetype-based world. `query_iter` / `query_next` / `query_get`.
 
+**voxel**: chunked voxel world — greedy meshing, per-LOD on-demand remesh, distance-sorted streaming, O(1) slot lookup.
+
+**settings**: engine + key-binding settings with INI persistence (vsync, fps limit, fov, mouse sensitivity, bloom, rebindable actions).
+
+**texture**: deduplicating array/layered texture builder over `kiln_assets` image decode.
+
 **platform**: window, event loop. X11 and Win32 backends.
 
 **core**: linalg, AABB, frustum, noise (Perlin + fBm), arena allocator, timer, logging, file I/O.
@@ -95,9 +101,12 @@ src/
   ecs/        archetype ECS
   camera/     orbit + FPS camera
   render/     Vulkan renderer + shaders
+  voxel/      chunked voxel world (meshing, LOD, streaming)
   ui/         immediate-mode UI
   gizmo/      transform gizmo
   assets/     OBJ, kmesh, STB image, scene format
+  texture/    array/layered texture builder
+  settings/   engine + key-binding settings (INI)
   physics/    AABB voxel collision
   app/        scene editor (entry point)
   tools/      kiln-bake (OBJ -> kmesh)
@@ -112,6 +121,7 @@ assets/
 | Variable | Purpose |
 |---|---|
 | `KILN_SHADER_DIR` | override compiled .spv search path |
+| `KILN_UI_SHADER_DIR` | override compiled HUD .spv search path |
 | `KILN_ASSET_DIR` | override asset root |
 
 ## License

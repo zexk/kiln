@@ -9,6 +9,7 @@ extern void  render_vk_get_context(VkInstance *inst, VkPhysicalDevice *phys,
 extern void  render_set_overlay_hook(void (*fn)(void *ud), void *ud);
 extern void *render_get_overlay_cmd(void);
 extern void  render_get_overlay_extent(uint32_t *w, uint32_t *h);
+extern int   render_get_frame_index(void);
 
 /* User overlay callback registered via renderer_set_overlay_fn(). */
 static void (*g_user_overlay_fn)(void *ud) = NULL;
@@ -18,11 +19,13 @@ static void  *g_user_overlay_ud            = NULL;
    Sets g_active_cmd so thin-renderer draw calls record into the right buffer. */
 static void r_overlay_hook(void *ud) {
     (void)ud;
-    g_active_cmd = (VkCommandBuffer)render_get_overlay_cmd();
+    g_active_cmd  = (VkCommandBuffer)render_get_overlay_cmd();
+    g_frame_index = render_get_frame_index();
     uint32_t w, h;
     render_get_overlay_extent(&w, &h);
     g_vk.swap_extent.width  = w;
     g_vk.swap_extent.height = h;
+    r_deferred_deletes_flush();
     if (g_user_overlay_fn)
         g_user_overlay_fn(g_user_overlay_ud);
     g_active_cmd = VK_NULL_HANDLE;
@@ -146,6 +149,7 @@ bool renderer_init(int width, int height, const platform_native_handles_t *nativ
 void renderer_shutdown(void) {
     if (g_vk.device == VK_NULL_HANDLE) return;
     vkDeviceWaitIdle(g_vk.device);
+    r_deferred_deletes_flush_all();
 
     /* Unregister from the rich renderer's frame loop. */
     render_set_overlay_hook(NULL, NULL);
@@ -212,11 +216,12 @@ void renderer_shutdown(void) {
  * Frame recording state
  * ============================================================================ */
 
-VkCommandBuffer g_active_cmd   = VK_NULL_HANDLE;
-bool            g_frame_started = false;
+VkCommandBuffer g_active_cmd    = VK_NULL_HANDLE;
+bool            g_frame_started  = false;
 bool            g_in_render_pass = false;
 float           g_clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-bool            g_clear_depth   = false;
+bool            g_clear_depth    = false;
+int             g_frame_index    = 0;
 
 /* ============================================================================
  * Frame control

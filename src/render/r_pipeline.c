@@ -346,15 +346,17 @@ R_Program renderer_create_program_typed(const char *vert_path, const char *frag_
     pipe->pipeline = create_graphics_pipeline(vert, frag, pipe->layout, &cfg);
 
     if (cfg.has_texture) {
+        VkDescriptorSetLayout layouts[MAX_FRAMES_IN_FLIGHT];
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) layouts[i] = pipe->desc_set_layout;
         VkDescriptorSetAllocateInfo ai = {0};
         ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
         ai.descriptorPool     = g_vk.desc_pool;
-        ai.descriptorSetCount = 1;
-        ai.pSetLayouts        = &pipe->desc_set_layout;
-        if (vkAllocateDescriptorSets(g_vk.device, &ai, &pipe->desc_set) != VK_SUCCESS)
-            pipe->desc_set = VK_NULL_HANDLE;
+        ai.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+        ai.pSetLayouts        = layouts;
+        if (vkAllocateDescriptorSets(g_vk.device, &ai, pipe->desc_sets) != VK_SUCCESS)
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) pipe->desc_sets[i] = VK_NULL_HANDLE;
     } else {
-        pipe->desc_set = VK_NULL_HANDLE;
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) pipe->desc_sets[i] = VK_NULL_HANDLE;
     }
 
     return idx;

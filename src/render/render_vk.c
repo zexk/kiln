@@ -456,6 +456,7 @@ void render_set_overlay_hook(void (*fn)(void *ud), void *ud) {
 /* Called by the thin renderer from within its overlay hook to obtain the
    active command buffer (cast avoids exposing VkCommandBuffer in render.h). */
 void *render_get_overlay_cmd(void) { return g_overlay_cmd; }
+int   render_get_frame_index(void) { return (int)g.frame; }
 
 void render_get_overlay_extent(uint32_t *w, uint32_t *h) {
     *w = g_overlay_ext.width;
@@ -828,6 +829,7 @@ static bool create_device(void) {
     features2.pNext = &features13;
     features2.features.fillModeNonSolid  = supported.fillModeNonSolid;
     features2.features.samplerAnisotropy = supported.samplerAnisotropy;
+    features2.features.wideLines         = supported.wideLines;
 
     VkDeviceCreateInfo info = {0};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

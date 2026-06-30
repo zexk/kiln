@@ -2,14 +2,14 @@
 
 bool create_descriptor_pool(void) {
     VkDescriptorPoolSize sizes[] = {
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 128},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 128 * MAX_FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 32},
     };
     VkDescriptorPoolCreateInfo ci = {0};
     ci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     ci.poolSizeCount = 2;
     ci.pPoolSizes    = sizes;
-    ci.maxSets       = 256;
+    ci.maxSets       = 256 * MAX_FRAMES_IN_FLIGHT;
     if (vkCreateDescriptorPool(g_vk.device, &ci, NULL, &g_vk.desc_pool) != VK_SUCCESS) {
         fprintf(stderr, "Failed to create descriptor pool\n");
         return false;

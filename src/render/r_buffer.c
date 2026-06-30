@@ -1,5 +1,76 @@
 #include "render_internal.h"
 
+/* ============================================================================
+ * Deferred buffer deletion
+ *
+ * Buffers destroyed while a frame is in flight are queued here.
+ * r_deferred_deletes_flush() is called each frame from r_overlay_hook(),
+ * after the rich renderer has waited on the per-frame fence.  With
+ * MAX_FRAMES_IN_FLIGHT=2 a buffer queued at frame N is safe to free at
+ * frame N+MAX_FRAMES_IN_FLIGHT (both in-flight slots have completed).
+ * ============================================================================ */
+
+typedef struct {
+    VkBuffer       vk_buffer;
+    VkDeviceMemory memory;
+    int64_t        slot;          /* R_Buffer slot to reclaim, or -1 if none */
+    int            frames_remaining;
+} DeferredDelete;
+
+#define DEFERRED_CAP 4096
+static DeferredDelete s_deferred[DEFERRED_CAP];
+static int            s_deferred_count = 0;
+
+static void defer_vk_buffer(VkBuffer vb, VkDeviceMemory mem, int64_t slot) {
+    if (s_deferred_count < DEFERRED_CAP) {
+        s_deferred[s_deferred_count++] = (DeferredDelete){
+            .vk_buffer        = vb,
+            .memory           = mem,
+            .slot             = slot,
+            .frames_remaining = MAX_FRAMES_IN_FLIGHT,
+        };
+    } else {
+        /* Queue full: the buffer may still be referenced by an in-flight frame,
+           so drain the GPU before destroying rather than risk a use-after-free.
+           Flush the backlog too, since every queued buffer is now safe. */
+        vkDeviceWaitIdle(g_vk.device);
+        r_deferred_deletes_flush_all();
+        vkDestroyBuffer(g_vk.device, vb, NULL);
+        vkFreeMemory(g_vk.device, mem, NULL);
+        if (slot >= 0) g_vk.buffer_free[g_vk.buffer_free_count++] = (uint32_t)slot;
+    }
+}
+
+void r_deferred_deletes_flush(void) {
+    int write = 0;
+    for (int i = 0; i < s_deferred_count; i++) {
+        s_deferred[i].frames_remaining--;
+        if (s_deferred[i].frames_remaining <= 0) {
+            if (s_deferred[i].vk_buffer != VK_NULL_HANDLE) {
+                vkDestroyBuffer(g_vk.device, s_deferred[i].vk_buffer, NULL);
+                vkFreeMemory(g_vk.device, s_deferred[i].memory, NULL);
+            }
+            if (s_deferred[i].slot >= 0)
+                g_vk.buffer_free[g_vk.buffer_free_count++] = (uint32_t)s_deferred[i].slot;
+        } else {
+            s_deferred[write++] = s_deferred[i];
+        }
+    }
+    s_deferred_count = write;
+}
+
+void r_deferred_deletes_flush_all(void) {
+    for (int i = 0; i < s_deferred_count; i++) {
+        if (s_deferred[i].vk_buffer != VK_NULL_HANDLE) {
+            vkDestroyBuffer(g_vk.device, s_deferred[i].vk_buffer, NULL);
+            vkFreeMemory(g_vk.device, s_deferred[i].memory, NULL);
+        }
+        if (s_deferred[i].slot >= 0)
+            g_vk.buffer_free[g_vk.buffer_free_count++] = (uint32_t)s_deferred[i].slot;
+    }
+    s_deferred_count = 0;
+}
+
 void copy_to_buffer(VkBuffer dst, VkDeviceSize dst_offset, VkDeviceSize size, const void *data) {
     assert(size <= g_vk.staging_size && "staging buffer too small");
 
@@ -39,15 +110,14 @@ R_Buffer renderer_create_buffer(void) {
 void renderer_destroy_buffer(R_Buffer buffer) {
     CHECK_DEVICE();
     if (buffer >= g_vk.buffer_count) return;
-    if (g_vk.buffers[buffer]) {
-        vkDestroyBuffer(g_vk.device, g_vk.buffers[buffer], NULL);
-        vkFreeMemory(g_vk.device, g_vk.buffer_memories[buffer], NULL);
-        g_vk.buffers[buffer]         = VK_NULL_HANDLE;
-        g_vk.buffer_memories[buffer] = VK_NULL_HANDLE;
-    }
     g_vk.buffer_sizes[buffer] = 0;
-    /* Reclaim the slot so a streaming world doesn't exhaust the pool. */
-    g_vk.buffer_free[g_vk.buffer_free_count++] = (uint32_t)buffer;
+    if (!g_vk.buffers[buffer]) {
+        g_vk.buffer_free[g_vk.buffer_free_count++] = (uint32_t)buffer;
+        return;
+    }
+    defer_vk_buffer(g_vk.buffers[buffer], g_vk.buffer_memories[buffer], (int64_t)buffer);
+    g_vk.buffers[buffer]         = VK_NULL_HANDLE;
+    g_vk.buffer_memories[buffer] = VK_NULL_HANDLE;
 }
 
 void renderer_bind_buffer(R_BufferTarget target, R_Buffer buffer) {
@@ -82,8 +152,8 @@ void renderer_buffer_data(R_BufferTarget target, size_t size, const void *data, 
 
     bool reuse = (g_vk.buffers[h] != VK_NULL_HANDLE && size <= g_vk.buffer_sizes[h]);
     if (!reuse && g_vk.buffers[h]) {
-        vkDestroyBuffer(g_vk.device, g_vk.buffers[h], NULL);
-        vkFreeMemory(g_vk.device, g_vk.buffer_memories[h], NULL);
+        /* Defer destruction — this buffer may still be referenced by an in-flight frame. */
+        defer_vk_buffer(g_vk.buffers[h], g_vk.buffer_memories[h], -1);
         g_vk.buffers[h]         = VK_NULL_HANDLE;
         g_vk.buffer_memories[h] = VK_NULL_HANDLE;
     }

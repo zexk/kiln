@@ -255,7 +255,8 @@ void renderer_bind_texture(R_TextureTarget target, R_Texture texture) {
 
     if (g_vk.active_pipeline < g_vk.pipeline_count && texture != R_INVALID_HANDLE) {
         Pipeline *pipe = &g_vk.pipelines[g_vk.active_pipeline];
-        if (pipe->desc_set != VK_NULL_HANDLE && g_vk.texture_views[texture] != VK_NULL_HANDLE) {
+        VkDescriptorSet ds = pipe->desc_sets[g_frame_index % MAX_FRAMES_IN_FLIGHT];
+        if (ds != VK_NULL_HANDLE && g_vk.texture_views[texture] != VK_NULL_HANDLE) {
             VkDescriptorImageInfo img = {0};
             img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             img.imageView   = g_vk.texture_views[texture];
@@ -263,7 +264,7 @@ void renderer_bind_texture(R_TextureTarget target, R_Texture texture) {
 
             VkWriteDescriptorSet w = {0};
             w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w.dstSet          = pipe->desc_set;
+            w.dstSet          = ds;
             w.dstBinding      = 0;
             w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w.descriptorCount = 1;

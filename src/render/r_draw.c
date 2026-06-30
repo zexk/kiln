@@ -27,9 +27,10 @@ void renderer_draw_arrays(R_Primitive primitive, int first, int count) {
     Pipeline *pipe = &g_vk.pipelines[g_vk.active_pipeline];
     vkCmdBindPipeline(g_active_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->pipeline);
 
-    if (pipe->desc_set != VK_NULL_HANDLE)
+    VkDescriptorSet ds = pipe->desc_sets[g_frame_index % MAX_FRAMES_IN_FLIGHT];
+    if (ds != VK_NULL_HANDLE)
         vkCmdBindDescriptorSets(g_active_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipe->layout, 0, 1, &pipe->desc_set, 0, NULL);
+                                pipe->layout, 0, 1, &ds, 0, NULL);
 
     if (g_push_dirty) {
         vkCmdPushConstants(g_active_cmd, pipe->layout,
@@ -58,9 +59,10 @@ void renderer_draw_elements(R_Primitive primitive, int count, int offset) {
     Pipeline *pipe = &g_vk.pipelines[g_vk.active_pipeline];
     vkCmdBindPipeline(g_active_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->pipeline);
 
-    if (pipe->desc_set != VK_NULL_HANDLE)
+    VkDescriptorSet ds2 = pipe->desc_sets[g_frame_index % MAX_FRAMES_IN_FLIGHT];
+    if (ds2 != VK_NULL_HANDLE)
         vkCmdBindDescriptorSets(g_active_cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                pipe->layout, 0, 1, &pipe->desc_set, 0, NULL);
+                                pipe->layout, 0, 1, &ds2, 0, NULL);
 
     if (g_push_dirty) {
         vkCmdPushConstants(g_active_cmd, pipe->layout,

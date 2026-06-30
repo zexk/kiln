@@ -31,7 +31,7 @@ typedef struct {
     VkPipeline            pipeline;
     VkPipelineLayout      layout;
     VkDescriptorSetLayout desc_set_layout;
-    VkDescriptorSet       desc_set;
+    VkDescriptorSet       desc_sets[MAX_FRAMES_IN_FLIGHT];
     VkShaderModule        vert_module;
     VkShaderModule        frag_module;
 } Pipeline;
@@ -121,6 +121,7 @@ extern bool g_frame_started;
 extern bool g_in_render_pass;
 extern float g_clear_color[4];
 extern bool g_clear_depth;
+extern int g_frame_index;
 
 typedef struct {
     R_Program program;
@@ -204,6 +205,8 @@ void            end_one_time_cmd(VkCommandBuffer cmd);
 
 /* Buffer helpers */
 void copy_to_buffer(VkBuffer dst, VkDeviceSize dst_offset, VkDeviceSize size, const void *data);
+void r_deferred_deletes_flush(void);
+void r_deferred_deletes_flush_all(void);
 
 /* Texture helpers */
 VkImage      create_image(uint32_t width, uint32_t height, uint32_t depth,

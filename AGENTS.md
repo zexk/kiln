@@ -34,10 +34,12 @@ Tests use the [Criterion](https://criterion.readthedocs.io) framework and requir
 
 ```sh
 ctest --test-dir build          # run all tests
-ctest --test-dir build -R ecs   # run a single test suite (ecs | arena | math)
+ctest --test-dir build -R ecs   # run a single test suite (ecs | arena | math | physics | core_geom | assets | voxel)
 ```
 
-Test sources live in `tests/`; each maps to one library (`kiln_ecs`, `kiln_core`).
+Test sources live in `tests/`, one file per suite: `test_ecs.c`, `test_arena.c`, `test_math.c` (`kiln_ecs`/`kiln_core`); `test_physics.c` (`kiln_physics` — AABB collision + voxel DDA raycast); `test_core_geom.c` (`kiln_core` — `aabb`/`frustum`); `test_assets.c` (`kiln_assets` — OBJ/kmesh/scene parsers, round-trips and malformed-input handling); `test_voxel.c` (`kiln_voxel` — greedy meshing face-culling and LOD, exercised without a live Vulkan device since `kv_mesh_upload` is never called).
+
+Build with `-DKILN_SANITIZE=ON` to compile/link with AddressSanitizer + UndefinedBehaviorSanitizer (CI runs this in the `sanitize` job).
 
 ## Shaders
 

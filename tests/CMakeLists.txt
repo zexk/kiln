@@ -20,3 +20,23 @@ add_executable(test_math test_math.c)
 target_include_directories(test_math PRIVATE ${CRITERION_INCLUDE_DIR})
 target_link_libraries(test_math PRIVATE kiln_core ${CRITERION_LIBRARY} m)
 add_test(NAME math COMMAND test_math)
+
+add_executable(test_physics test_physics.c)
+target_include_directories(test_physics PRIVATE ${CRITERION_INCLUDE_DIR})
+target_link_libraries(test_physics PRIVATE kiln_physics kiln_core ${CRITERION_LIBRARY} m)
+add_test(NAME physics COMMAND test_physics)
+
+add_executable(test_core_geom test_core_geom.c)
+target_include_directories(test_core_geom PRIVATE ${CRITERION_INCLUDE_DIR})
+target_link_libraries(test_core_geom PRIVATE kiln_core ${CRITERION_LIBRARY} m)
+add_test(NAME core_geom COMMAND test_core_geom)
+
+add_executable(test_assets test_assets.c)
+target_include_directories(test_assets PRIVATE ${CRITERION_INCLUDE_DIR})
+target_link_libraries(test_assets PRIVATE kiln_assets kiln_core ${CRITERION_LIBRARY} m)
+add_test(NAME assets COMMAND test_assets)
+
+add_executable(test_voxel test_voxel.c)
+target_include_directories(test_voxel PRIVATE ${CRITERION_INCLUDE_DIR})
+target_link_libraries(test_voxel PRIVATE kiln_voxel kiln_core ${CRITERION_LIBRARY} m)
+add_test(NAME voxel COMMAND test_voxel)

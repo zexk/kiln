@@ -11,6 +11,12 @@ endif()
 
 add_compile_options(-Wall -Wextra)
 
+option(KILN_SANITIZE "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+if(KILN_SANITIZE)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
 if(NOT WIN32)
     find_package(X11 REQUIRED)
 endif()

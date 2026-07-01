@@ -1,0 +1,16 @@
+# cppcheck suppressions for kiln
+#
+# returnImplicitInt / unknownMacro: false positives on Criterion's Test()
+# macro (including its 3-arg form with a designated-initializer-style
+# .init = fn parameter), which cppcheck doesn't expand before these checks.
+returnImplicitInt
+unknownMacro:tests/*
+
+# uninitvar false positive: palette_find_or_add's `ids` array is read only
+# up to *count, which starts at 0, so the "uninitialized" slots are never
+# dereferenced.
+uninitvar:src/voxel/kv_world.c:45
+
+# ignoredReturnValue false positive: sinf()'s return value is used inside
+# the surrounding compound literal; cppcheck loses track of it there.
+ignoredReturnValue:src/camera/camera.c:29

@@ -18,6 +18,25 @@ jobs:
       - name: statix
         run: nix run nixpkgs#statix -- check .
 
+  static-analysis:
+    name: Static Analysis (cppcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v4
+      - uses: DeterminateSystems/magic-nix-cache-action@v2
+      - name: configure (generates compile_commands.json)
+        run: nix develop -c cmake -B build -G Ninja
+      - name: cppcheck
+        run: |
+          nix run nixpkgs#cppcheck -- \
+            --project=build/compile_commands.json \
+            --enable=warning,performance,portability \
+            --error-exitcode=1 \
+            --suppress=missingIncludeSystem \
+            --suppressions-list=.cppcheck-suppressions \
+            -i build
+
   build:
     name: Build & Test
     runs-on: ubuntu-latest
@@ -27,6 +46,18 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@v2
       - name: build (includes tests via doCheck)
         run: nix build -L
+
+  sanitize:
+    name: ASan + UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v4
+      - uses: DeterminateSystems/magic-nix-cache-action@v2
+      - name: build with sanitizers
+        run: nix develop -c bash -c "cmake -B build -G Ninja -DKILN_SANITIZE=ON && ninja -C build"
+      - name: test with sanitizers
+        run: nix develop -c ctest --test-dir build --output-on-failure
 
   win32:
     name: Cross-compile Win32

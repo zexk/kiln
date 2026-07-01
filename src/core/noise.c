@@ -82,6 +82,7 @@ static float noise_perlin3d(float x, float y, float z) {
 }
 
 float noise_fbm2d(float x, float y, int octaves, float lacunarity, float gain) {
+    if (octaves < 1) octaves = 1; /* weight must stay non-zero */
     float value     = 0.0f;
     float amplitude = 1.0f;
     float frequency = 1.0f;
@@ -96,6 +97,7 @@ float noise_fbm2d(float x, float y, int octaves, float lacunarity, float gain) {
 }
 
 float noise_fbm3d(float x, float y, float z, int octaves, float lacunarity, float gain) {
+    if (octaves < 1) octaves = 1; /* weight must stay non-zero */
     float value = 0.0f, amplitude = 1.0f, frequency = 1.0f, weight = 0.0f;
     for (int i = 0; i < octaves; i++) {
         value     += noise_perlin3d(x*frequency, y*frequency, z*frequency) * amplitude;

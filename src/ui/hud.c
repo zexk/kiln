@@ -1,10 +1,9 @@
 #include "hud.h"
 #include "font8x8.h"
+#include "core.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-char *platform_resolve_path(const char *path);
 
 #define HUD_FONT_W   5
 #define HUD_FONT_H   8
@@ -69,11 +68,14 @@ static bool hud_point_in_rect(const hud_t *g, float x, float y, float w, float h
 bool hud_init(hud_t *g) {
     memset(g, 0, sizeof(*g));
 
-    char *vert = platform_resolve_path("shaders/hud.vert");
-    char *frag = platform_resolve_path("shaders/hud.frag");
+    /* $KILN_UI_SHADER_DIR override → installed share/kiln/shaders → the
+       build-tree dir baked in at compile time. */
+    char dir[1024], vert[1200], frag[1200];
+    core_resource_dir(dir, sizeof(dir), "KILN_UI_SHADER_DIR", "shaders",
+                      KILN_UI_SHADER_DIR);
+    snprintf(vert, sizeof(vert), "%s/hud.vert", dir);
+    snprintf(frag, sizeof(frag), "%s/hud.frag", dir);
     g->program = renderer_create_program_typed(vert, frag, R_PIPELINE_HUD);
-    free(vert);
-    free(frag);
     if (g->program == R_INVALID_HANDLE) return false;
 
     g->vao = renderer_create_vao();

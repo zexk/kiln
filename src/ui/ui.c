@@ -70,7 +70,9 @@ void ui_panel_begin(ui_t *ui, float x, float y, float w) {
     ui->panel_w = w;
     ui->cursor_y = y + UI_PAD;
 
-    float h = ui->panel_height[ui->panel_index]; /* from last frame */
+    float h = (ui->panel_index < UI_MAX_PANELS)
+                  ? ui->panel_height[ui->panel_index] /* from last frame */
+                  : 0.0f;
     if (h <= 0.0f) {
         h = UI_ROW; /* first frame: self-corrects next frame */
     }

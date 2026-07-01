@@ -49,7 +49,12 @@ uint8_t        g_push_constants[256];
 bool           g_push_dirty     = false;
 
 int       g_active_texture_unit    = 0;
-R_Texture g_bound_textures[16]     = {R_INVALID_HANDLE};
+R_Texture g_bound_textures[16]     = {
+    R_INVALID_HANDLE, R_INVALID_HANDLE, R_INVALID_HANDLE, R_INVALID_HANDLE,
+    R_INVALID_HANDLE, R_INVALID_HANDLE, R_INVALID_HANDLE, R_INVALID_HANDLE,
+    R_INVALID_HANDLE, R_INVALID_HANDLE, R_INVALID_HANDLE, R_INVALID_HANDLE,
+    R_INVALID_HANDLE, R_INVALID_HANDLE, R_INVALID_HANDLE, R_INVALID_HANDLE,
+};
 
 VAOState g_vao_state  = {0};
 R_VAO    g_current_vao = R_INVALID_HANDLE;

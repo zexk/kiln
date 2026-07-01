@@ -1792,10 +1792,12 @@ static bool build_mesh_pipeline(VkPolygonMode poly_mode, VkPipeline *out) {
     dynamic.dynamicStateCount = 2;
     dynamic.pDynamicStates    = dynamic_states;
 
+    /* Draws into the HDR scene pass (g.color_image), not the swapchain. */
+    static const VkFormat scene_color_fmt = PP_FORMAT;
     VkPipelineRenderingCreateInfo rendering = {0};
     rendering.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     rendering.colorAttachmentCount    = 1;
-    rendering.pColorAttachmentFormats = &g.swapchain_format;
+    rendering.pColorAttachmentFormats = &scene_color_fmt;
     rendering.depthAttachmentFormat   = g.depth_format;
 
     VkGraphicsPipelineCreateInfo info = {0};
@@ -1905,10 +1907,12 @@ static bool build_inst_pipeline(VkPolygonMode poly_mode, VkPipeline *out) {
     dyn.dynamicStateCount = 2;
     dyn.pDynamicStates    = dyn_states;
 
+    /* Draws into the HDR scene pass (g.color_image), not the swapchain. */
+    static const VkFormat scene_color_fmt = PP_FORMAT;
     VkPipelineRenderingCreateInfo rendering = {0};
     rendering.sType                   = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     rendering.colorAttachmentCount    = 1;
-    rendering.pColorAttachmentFormats = &g.swapchain_format;
+    rendering.pColorAttachmentFormats = &scene_color_fmt;
     rendering.depthAttachmentFormat   = g.depth_format;
 
     VkGraphicsPipelineCreateInfo info = {0};
@@ -4312,6 +4316,7 @@ void render_shutdown(void) {
     vkDestroyPipeline(g.device, g.pp_threshold_pipeline, NULL);
     vkDestroyPipelineLayout(g.device, g.pp_layout, NULL);
     vkDestroyDescriptorPool(g.device, g.pp_pool, NULL);
+    g.pp_pool = VK_NULL_HANDLE; /* destroy_swapchain below would reset it */
     vkDestroyDescriptorSetLayout(g.device, g.pp_set_layout, NULL);
     vkDestroySampler(g.device, g.pp_sampler, NULL);
 

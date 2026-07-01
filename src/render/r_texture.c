@@ -224,11 +224,25 @@ static void upload_array_layer(VkImage image, uint32_t layer,
  * Public API: textures
  * ============================================================================ */
 
+/* Accumulated sampler parameters per texture: renderer_tex_param rebuilds the
+   sampler from this state, so successive calls (wrap, then filters, ...)
+   compose instead of each call resetting the others to defaults. */
+typedef struct {
+    R_TexValue min_filter, mag_filter;
+    R_TexValue wrap_s, wrap_t, wrap_r;
+} TexSamplerState;
+static TexSamplerState s_sampler_state[R_MAX_TEXTURES];
+
 R_Texture renderer_create_texture(void) {
     CHECK_DEVICE_RET(R_INVALID_HANDLE);
     if (g_vk.texture_count >= MAX_TEXTURES) return R_INVALID_HANDLE;
     uint32_t idx = g_vk.texture_count++;
     g_vk.texture_samplers[idx] = g_vk.default_sampler;
+    s_sampler_state[idx] = (TexSamplerState){
+        .min_filter = R_TEX_NEAREST, .mag_filter = R_TEX_NEAREST,
+        .wrap_s = R_TEX_CLAMP_TO_EDGE, .wrap_t = R_TEX_CLAMP_TO_EDGE,
+        .wrap_r = R_TEX_CLAMP_TO_EDGE,
+    };
     return idx;
 }
 
@@ -376,29 +390,28 @@ void renderer_tex_param(R_TextureTarget target, R_TexParam param, R_TexValue val
     R_Texture tex = g_bound_textures[g_active_texture_unit];
     if (tex >= g_vk.texture_count) return;
 
+    TexSamplerState *st = &s_sampler_state[tex];
+    switch (param) {
+    case R_TEX_MIN_FILTER: st->min_filter = value; break;
+    case R_TEX_MAG_FILTER: st->mag_filter = value; break;
+    case R_TEX_WRAP_S:     st->wrap_s     = value; break;
+    case R_TEX_WRAP_T:     st->wrap_t     = value; break;
+    case R_TEX_WRAP_R:     st->wrap_r     = value; break;
+    }
+
+#define ADDR(v) ((v) == R_TEX_REPEAT ? VK_SAMPLER_ADDRESS_MODE_REPEAT \
+                                     : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
     VkSamplerCreateInfo ci = {0};
     ci.sType            = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    ci.magFilter        = VK_FILTER_NEAREST;
-    ci.minFilter        = VK_FILTER_NEAREST;
-    ci.addressModeU     = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    ci.addressModeV     = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    ci.addressModeW     = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ci.magFilter        = st->mag_filter == R_TEX_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    ci.minFilter        = st->min_filter == R_TEX_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+    ci.addressModeU     = ADDR(st->wrap_s);
+    ci.addressModeV     = ADDR(st->wrap_t);
+    ci.addressModeW     = ADDR(st->wrap_r);
     ci.maxAnisotropy    = 1.0f;
     ci.borderColor      = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
     ci.mipmapMode       = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-
-    if (param == R_TEX_MIN_FILTER || param == R_TEX_MAG_FILTER) {
-        VkFilter f = (value == R_TEX_LINEAR) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-        if (param == R_TEX_MIN_FILTER) ci.minFilter = f;
-        else                           ci.magFilter = f;
-    }
-    if (param == R_TEX_WRAP_S || param == R_TEX_WRAP_T || param == R_TEX_WRAP_R) {
-        VkSamplerAddressMode m = (value == R_TEX_REPEAT)
-            ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        if (param == R_TEX_WRAP_S) ci.addressModeU = m;
-        if (param == R_TEX_WRAP_T) ci.addressModeV = m;
-        if (param == R_TEX_WRAP_R) ci.addressModeW = m;
-    }
+#undef ADDR
 
     if (g_vk.texture_samplers[tex] != g_vk.default_sampler)
         vkDestroySampler(g_vk.device, g_vk.texture_samplers[tex], NULL);

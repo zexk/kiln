@@ -222,6 +222,17 @@ bool kmesh_load(const char *path, cpu_mesh_t *out) {
 
     free(data);
 
+    /* Reject out-of-range indices: cpu_mesh_compute_normals indexes vertices
+       through them, so a corrupt file would read/write out of bounds. */
+    for (uint32_t i = 0; i < h.icount; i++) {
+        if (out->indices[i] >= h.vcount) {
+            fprintf(stderr, "[kmesh] '%s': index %u out of range (vcount %u)\n",
+                    path, out->indices[i], h.vcount);
+            cpu_mesh_free(out);
+            return false;
+        }
+    }
+
     cpu_mesh_compute_normals(out);
 
     fprintf(stderr, "[kmesh] loaded '%s': %u verts %u tris\n", path,

@@ -124,6 +124,7 @@ int scene_load(const char *path, scene_entity_t *out, int max_count) {
         float pos[3], rot[4], scl[3];
 
         memcpy(e->name, p, SCENE_NAME_MAX); p += SCENE_NAME_MAX;
+        e->name[SCENE_NAME_MAX - 1] = '\0'; /* file bytes may lack a terminator */
         memcpy(pos,     p, sizeof(pos));    p += sizeof(pos);
         memcpy(rot,     p, sizeof(rot));    p += sizeof(rot);
         memcpy(scl,     p, sizeof(scl));    p += sizeof(scl);

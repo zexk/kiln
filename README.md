@@ -6,7 +6,7 @@ Kyub (the voxel game built on it) lives at [zexk/kyub](https://github.com/zexk/k
 
 ## Modules
 
-**render**: Vulkan, dynamic rendering, no render pass objects. HDR offscreen target, bloom (threshold + gaussian + Reinhard), cascaded shadow maps (3 cascades, PCF 3x3), point lights (up to 8, Blinn-Phong), normal mapping, instanced draws, frustum culling, skybox, CPU particles, screenshot readback.
+**render**: Vulkan, dynamic rendering, no render pass objects. HDR offscreen target, bloom (threshold + gaussian + Reinhard), cascaded shadow maps (3 cascades, PCF 3x3), point lights (up to 8, Blinn-Phong), normal mapping, instanced draws, GPU-driven frustum culling (compute), skybox, GPU particles (compute), screenshot readback.
 
 **ecs**: archetype-based world. `query_iter` / `query_next` / `query_get`.
 

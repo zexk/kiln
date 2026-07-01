@@ -27,7 +27,7 @@ if(KILN_RENDERER STREQUAL "vulkan")
 
     # kiln_render: rich high-level renderer + low-level renderer_* API (unified)
     add_library(kiln_render STATIC
-        render_vk.c particles.c
+        render_vk.c
         r_renderer.c r_instance.c r_command.c
         r_pipeline.c r_buffer.c r_texture.c r_draw.c)
     add_dependencies(kiln_render kiln_shaders)

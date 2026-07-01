@@ -5,6 +5,7 @@
 #include "physics.h"
 #include "timer.h"
 #include "mesh.h"
+#include "core.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,6 +122,7 @@ int main(void) {
     /* ---- precompute line model matrices ---- */
     int n_lines = (int)(2.0f * FIELD_HALF / LINE_SPACING) + 1;
     mat4_t *line_models = malloc(sizeof(mat4_t) * (uint32_t)n_lines);
+    CORE_CHECK_ALLOC(line_models);
     for (int i = 0; i < n_lines; i++) {
         float z = -FIELD_HALF + i * LINE_SPACING;
         line_models[i] = mat4_from_trs(
@@ -149,6 +151,9 @@ int main(void) {
     mat4_t *inst_hit  = malloc(sizeof(mat4_t) * MAX_NEEDLES);
     mat4_t *inst_miss = malloc(sizeof(mat4_t) * MAX_NEEDLES);
     mat4_t *inst_fly  = malloc(sizeof(mat4_t) * MAX_NEEDLES);
+    CORE_CHECK_ALLOC(inst_hit);
+    CORE_CHECK_ALLOC(inst_miss);
+    CORE_CHECK_ALLOC(inst_fly);
 
     bool   running   = true;
     bool   paused    = false;

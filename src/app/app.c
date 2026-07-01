@@ -96,11 +96,13 @@ static int add_prototype(app_t *app, const char *name, cpu_mesh_t *m,
        the recentred AABB for broadphase. */
     p->pick_vcount = m->vertex_count;
     p->pick_pos = malloc(sizeof(vec3_t) * m->vertex_count);
+    CORE_CHECK_ALLOC(p->pick_pos);
     for (uint32_t i = 0; i < m->vertex_count; i++) {
         p->pick_pos[i] = m->vertices[i].position;
     }
     p->pick_icount = m->index_count;
     p->pick_idx = malloc(sizeof(uint32_t) * m->index_count);
+    CORE_CHECK_ALLOC(p->pick_idx);
     memcpy(p->pick_idx, m->indices, sizeof(uint32_t) * m->index_count);
     cpu_mesh_bounds(m, &p->pick_min, &p->pick_max); /* recentred bounds */
     return app->prototype_count++;

@@ -644,6 +644,7 @@ static bool layer_available(const char *name) {
     uint32_t count = 0;
     vkEnumerateInstanceLayerProperties(&count, NULL);
     VkLayerProperties *layers = malloc(sizeof(*layers) * count);
+    CORE_CHECK_ALLOC(layers);
     vkEnumerateInstanceLayerProperties(&count, layers);
     bool found = false;
     for (uint32_t i = 0; i < count; i++) {
@@ -746,6 +747,7 @@ static bool pick_physical_device(void) {
         return false;
     }
     VkPhysicalDevice *devices = malloc(sizeof(*devices) * count);
+    CORE_CHECK_ALLOC(devices);
     vkEnumeratePhysicalDevices(g.instance, &count, devices);
 
     g.physical_device = devices[0];
@@ -767,6 +769,7 @@ static bool pick_physical_device(void) {
     uint32_t qcount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(g.physical_device, &qcount, NULL);
     VkQueueFamilyProperties *queues = malloc(sizeof(*queues) * qcount);
+    CORE_CHECK_ALLOC(queues);
     vkGetPhysicalDeviceQueueFamilyProperties(g.physical_device, &qcount,
                                              queues);
     g.graphics_family = UINT32_MAX;
@@ -864,6 +867,7 @@ static VkPresentModeKHR choose_present_mode(bool vsync) {
     vkGetPhysicalDeviceSurfacePresentModesKHR(g.physical_device, g.surface,
                                              &count, NULL);
     VkPresentModeKHR *modes = malloc(sizeof(*modes) * count);
+    CORE_CHECK_ALLOC(modes);
     vkGetPhysicalDeviceSurfacePresentModesKHR(g.physical_device, g.surface,
                                              &count, modes);
     VkPresentModeKHR result = VK_PRESENT_MODE_FIFO_KHR;
@@ -908,6 +912,7 @@ static bool create_swapchain(void) {
     vkGetPhysicalDeviceSurfaceFormatsKHR(g.physical_device, g.surface,
                                          &format_count, NULL);
     VkSurfaceFormatKHR *formats = malloc(sizeof(*formats) * format_count);
+    CORE_CHECK_ALLOC(formats);
     vkGetPhysicalDeviceSurfaceFormatsKHR(g.physical_device, g.surface,
                                          &format_count, formats);
     VkSurfaceFormatKHR chosen = formats[0];
@@ -971,9 +976,11 @@ static bool create_swapchain(void) {
 
     vkGetSwapchainImagesKHR(g.device, g.swapchain, &g.image_count, NULL);
     g.images = malloc(sizeof(VkImage) * g.image_count);
+    CORE_CHECK_ALLOC(g.images);
     vkGetSwapchainImagesKHR(g.device, g.swapchain, &g.image_count, g.images);
 
     g.image_views = malloc(sizeof(VkImageView) * g.image_count);
+    CORE_CHECK_ALLOC(g.image_views);
     for (uint32_t i = 0; i < g.image_count; i++) {
         VkImageViewCreateInfo view = {0};
         view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -2408,6 +2415,7 @@ static bool create_text_buffers(void) {
 
 static bool create_render_finished_semaphores(void) {
     g.render_finished = malloc(sizeof(VkSemaphore) * g.image_count);
+    CORE_CHECK_ALLOC(g.render_finished);
     VkSemaphoreCreateInfo sem = {0};
     sem.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     for (uint32_t i = 0; i < g.image_count; i++) {

@@ -1,6 +1,7 @@
 #include "kv_internal.h"
 #include "log.h"
 #include "frustum.h"
+#include "core.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -270,6 +271,7 @@ static void add_slot(kv_world_t *w, int32_t cx, int32_t cy, int32_t cz,
         if (w->slots[i].active) continue;
         KvSlot *sl = &w->slots[i];
         sl->chunk = calloc(1, sizeof(KvChunk));
+        CORE_CHECK_ALLOC(sl->chunk);
         sl->chunk->cx=cx; sl->chunk->cy=cy; sl->chunk->cz=cz;
         sl->chunk->aabb_min=(vec3_t){(float)(cx*KV_CHUNK_SIZE),(float)(cy*KV_CHUNK_SIZE),(float)(cz*KV_CHUNK_SIZE)};
         sl->chunk->aabb_max=(vec3_t){(float)((cx+1)*KV_CHUNK_SIZE),(float)((cy+1)*KV_CHUNK_SIZE),(float)((cz+1)*KV_CHUNK_SIZE)};
@@ -318,8 +320,10 @@ kv_world_t *kv_world_create(int horiz_dist, int vert_radius,
     int hs = 2*(horiz_dist+2)+1;
     int vs = 2*(vert_radius+2)+1;
     kv_world_t *w = calloc(1, sizeof(kv_world_t));
+    CORE_CHECK_ALLOC(w);
     w->cap              = hs * hs * vs;
     w->slots            = calloc(w->cap, sizeof(KvSlot));
+    CORE_CHECK_ALLOC(w->slots);
     w->horiz_dist       = horiz_dist;
     w->vert_radius      = vert_radius;
     w->gen              = gen;
@@ -338,10 +342,12 @@ kv_world_t *kv_world_create(int horiz_dist, int vert_radius,
     w->ht_cap = 1;
     while (w->ht_cap < w->cap * 2) w->ht_cap <<= 1;
     w->ht = malloc((size_t)w->ht_cap * sizeof(KvHtEntry));
+    CORE_CHECK_ALLOC(w->ht);
     memset(w->ht, 0xFF, (size_t)w->ht_cap * sizeof(KvHtEntry)); /* idx = -1 = empty */
     w->ht_tomb = 0;
 
     w->pending_buf = malloc((size_t)w->cap * sizeof(KvPending));
+    CORE_CHECK_ALLOC(w->pending_buf);
 
     return w;
 }

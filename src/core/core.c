@@ -19,6 +19,12 @@
 void core_init(void) {
 }
 
+void core_oom_abort(const char *file, int line) {
+    fprintf(stderr, "[fatal] out of memory at %s:%d\n", file, line);
+    log_shutdown();
+    abort();
+}
+
 static void crash_handler(int sig) {
     fprintf(stderr, "\n=== CRASH (signal %d) ===\n", sig);
 #if !defined(_WIN32) && defined(__GLIBC__)

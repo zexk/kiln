@@ -1,4 +1,5 @@
 #include "arena.h"
+#include "core.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -35,9 +36,7 @@ struct arena {
 
 static arena_block_t *block_create(size_t capacity) {
     arena_block_t *b = malloc(sizeof(arena_block_t) + capacity);
-    if (!b) {
-        abort();
-    }
+    CORE_CHECK_ALLOC(b);
     b->next = NULL;
     b->used = 0;
     b->capacity = capacity;
@@ -64,9 +63,7 @@ arena_t *arena_create(size_t block_size) {
     }
 
     arena_t *arena = malloc(sizeof(arena_t));
-    if (!arena) {
-        abort();
-    }
+    CORE_CHECK_ALLOC(arena);
     arena->block_size = block_size;
     arena->first = block_create(block_size);
     arena->current = arena->first;

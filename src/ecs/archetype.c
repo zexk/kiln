@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "world.h"
+#include "core.h"
 
 archetype_t *archetype_create(world_t *world, signature_t signature) {
     /* the struct and its column-pointer array are create-once and live for the
@@ -54,11 +55,13 @@ static void archetype_grow(world_t *world, archetype_t *archetype, uint32_t min_
     }
 
     archetype->entities = realloc(archetype->entities, new_capacity * sizeof(entity_t));
+    CORE_CHECK_ALLOC(archetype->entities);
 
     for (uint32_t i = 0; i < archetype->component_count; i++) {
         component_id_t id = archetype->component_ids[i];
         size_t size = world->components[id].size;
         archetype->columns[i] = realloc(archetype->columns[i], (size_t)new_capacity * size);
+        CORE_CHECK_ALLOC(archetype->columns[i]);
     }
 
     archetype->capacity = new_capacity;

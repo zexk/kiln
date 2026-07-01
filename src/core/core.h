@@ -4,6 +4,22 @@
 
 void core_init(void);
 
+/* Log an out-of-memory error and abort. For allocations on the engine-internal
+   hot path (ECS, renderer, voxel, platform, arena) where the caller has no
+   sane recovery path. Allocations at a boundary that processes external/
+   attacker-controlled input (file loaders, parsers) should instead check and
+   fail gracefully.
+
+   Unconditionally GNU-attributed (no __GNUC__/__clang__ guard): kiln only
+   ever builds with gcc (native and mingw cross-compile), and a guard here
+   confuses cppcheck's multi-configuration preprocessing into checking a
+   branch where the attribute is stripped, which defeats its noreturn-aware
+   null-deref analysis after CORE_CHECK_ALLOC. */
+__attribute__((noreturn)) void core_oom_abort(const char *file, int line);
+
+#define CORE_CHECK_ALLOC(p) \
+    do { if (!(p)) core_oom_abort(__FILE__, __LINE__); } while (0)
+
 /* Install signal handlers that print a backtrace (POSIX) or the signal number
    (Win32) to stderr before flushing the log and aborting.  Call once at
    startup, before any other initialisation. */

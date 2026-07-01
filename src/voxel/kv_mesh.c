@@ -1,4 +1,5 @@
 #include "kv_internal.h"
+#include "core.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -10,6 +11,7 @@ void kv_mesh_init(KvMesh *m) {
     m->count = 0;
     m->cap   = INITIAL_VERTS;
     m->verts = malloc(sizeof(KvVertex) * m->cap);
+    CORE_CHECK_ALLOC(m->verts);
     m->vao   = R_INVALID_HANDLE;
     m->vbo   = R_INVALID_HANDLE;
 }
@@ -22,7 +24,7 @@ static void push_vertex(KvMesh *m,
     if (m->count >= m->cap) {
         m->cap  *= 2;
         KvVertex *nv = realloc(m->verts, sizeof(KvVertex) * m->cap);
-        if (!nv) return;
+        CORE_CHECK_ALLOC(nv);
         m->verts = nv;
     }
     x += nx * FACE_EPSILON;

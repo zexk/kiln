@@ -52,6 +52,15 @@ void init_resource_arrays(void) {
     g_vk.buffer_free      = calloc(MAX_BUFFERS,    sizeof(uint32_t));
     g_vk.vao_free         = calloc(MAX_VAO,        sizeof(uint32_t));
 
+    if (!g_vk.pipelines || !g_vk.buffers || !g_vk.buffer_memories ||
+        !g_vk.buffer_sizes || !g_vk.textures || !g_vk.texture_memories ||
+        !g_vk.texture_views || !g_vk.texture_samplers ||
+        !g_vk.texture_widths || !g_vk.texture_heights ||
+        !g_vk.texture_depths || !g_vk.vaos || !g_vk.buffer_free ||
+        !g_vk.vao_free) {
+        core_oom_abort(__FILE__, __LINE__);
+    }
+
     g_vk.buffer_count      = 0;
     g_vk.buffer_free_count = 0;
     g_vk.texture_count     = 0;

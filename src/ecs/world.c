@@ -1,4 +1,5 @@
 #include "world.h"
+#include "core.h"
 
 #include <assert.h>
 #include <stdlib.h>
@@ -14,6 +15,7 @@ world_t *world_create(void) {
 
     world->empty_archetype = archetype_create(world, empty);
     world->archetypes = malloc(sizeof(archetype_t *));
+    CORE_CHECK_ALLOC(world->archetypes);
     world->archetypes[0] = world->empty_archetype;
     world->archetype_count = 1;
     world->archetype_capacity = 1;
@@ -64,6 +66,7 @@ static archetype_t *world_find_or_create_archetype(world_t *world, signature_t s
     if (world->archetype_count == world->archetype_capacity) {
         world->archetype_capacity = world->archetype_capacity ? world->archetype_capacity * 2 : 4;
         world->archetypes = realloc(world->archetypes, world->archetype_capacity * sizeof(archetype_t *));
+        CORE_CHECK_ALLOC(world->archetypes);
     }
 
     archetype_t *a = archetype_create(world, signature);
@@ -111,6 +114,8 @@ static void world_ensure_entity_capacity(world_t *world, uint32_t index) {
 
     world->locations = realloc(world->locations, new_capacity * sizeof(entity_loc_t));
     world->generations = realloc(world->generations, new_capacity * sizeof(uint32_t));
+    CORE_CHECK_ALLOC(world->locations);
+    CORE_CHECK_ALLOC(world->generations);
 
     for (uint32_t i = world->entity_capacity; i < new_capacity; i++) {
         world->locations[i] = (entity_loc_t){ 0 };
@@ -166,6 +171,7 @@ void entity_destroy(world_t *world, entity_t entity) {
     if (world->free_count == world->free_capacity) {
         world->free_capacity = world->free_capacity ? world->free_capacity * 2 : 16;
         world->free_indices = realloc(world->free_indices, world->free_capacity * sizeof(uint32_t));
+        CORE_CHECK_ALLOC(world->free_indices);
     }
     world->free_indices[world->free_count++] = index;
 }

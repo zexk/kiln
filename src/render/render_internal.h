@@ -12,6 +12,7 @@
 
 #include "renderer.h"
 #include "platform.h"
+#include "core.h"
 
 #include <assert.h>
 #include <stdbool.h>

@@ -127,9 +127,27 @@ static void add_face(KvMesh *m,
 
 #undef S
 
+/* Face-visibility check used by the per-block face loop below (NOT by the AO
+   sampling in add_face, which stays chunk-local via local_transparent).
+   Callers only ever offset exactly one of x/y/z by ±1 from a valid in-range
+   coordinate, so at most one axis is ever out of [0, KV_CHUNK_SIZE). */
+static bool face_open(uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
+                      const KvNeighbors *nbrs, int x, int y, int z) {
+    if (x >= 0 && x < KV_CHUNK_SIZE && y >= 0 && y < KV_CHUNK_SIZE && z >= 0 && z < KV_CHUNK_SIZE)
+        return !kv_block_opaque(blk[x][y][z]);
+    if (!nbrs) return true;
+    if (x < 0)               return nbrs->xn ? !kv_block_opaque(nbrs->xn[KV_CHUNK_SIZE-1][y][z]) : true;
+    if (x >= KV_CHUNK_SIZE)   return nbrs->xp ? !kv_block_opaque(nbrs->xp[0][y][z])               : true;
+    if (y < 0)                return nbrs->yn ? !kv_block_opaque(nbrs->yn[x][KV_CHUNK_SIZE-1][z]) : true;
+    if (y >= KV_CHUNK_SIZE)   return nbrs->yp ? !kv_block_opaque(nbrs->yp[x][0][z])               : true;
+    if (z < 0)                return nbrs->zn ? !kv_block_opaque(nbrs->zn[x][y][KV_CHUNK_SIZE-1]) : true;
+    /* z >= KV_CHUNK_SIZE */  return nbrs->zp ? !kv_block_opaque(nbrs->zp[x][y][0])               : true;
+}
+
 void kv_mesh_generate(KvMesh *m,
                       uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
-                      int32_t cx, int32_t cy, int32_t cz) {
+                      int32_t cx, int32_t cy, int32_t cz,
+                      const KvNeighbors *nbrs) {
     m->count = 0;
     for (int lx = 0; lx < KV_CHUNK_SIZE; lx++) {
         for (int ly = 0; ly < KV_CHUNK_SIZE; ly++) {
@@ -139,12 +157,12 @@ void kv_mesh_generate(KvMesh *m,
                 float ox = (float)(cx * KV_CHUNK_SIZE + lx);
                 float oy = (float)(cy * KV_CHUNK_SIZE + ly);
                 float oz = (float)(cz * KV_CHUNK_SIZE + lz);
-                if (local_transparent(blk,lx,ly,lz+1)) add_face(m,blk,lx,ly,lz,0,t,ox,oy,oz);
-                if (local_transparent(blk,lx,ly,lz-1)) add_face(m,blk,lx,ly,lz,1,t,ox,oy,oz);
-                if (local_transparent(blk,lx-1,ly,lz)) add_face(m,blk,lx,ly,lz,2,t,ox,oy,oz);
-                if (local_transparent(blk,lx+1,ly,lz)) add_face(m,blk,lx,ly,lz,3,t,ox,oy,oz);
-                if (local_transparent(blk,lx,ly+1,lz)) add_face(m,blk,lx,ly,lz,4,t,ox,oy,oz);
-                if (local_transparent(blk,lx,ly-1,lz)) add_face(m,blk,lx,ly,lz,5,t,ox,oy,oz);
+                if (face_open(blk,nbrs,lx,ly,lz+1)) add_face(m,blk,lx,ly,lz,0,t,ox,oy,oz);
+                if (face_open(blk,nbrs,lx,ly,lz-1)) add_face(m,blk,lx,ly,lz,1,t,ox,oy,oz);
+                if (face_open(blk,nbrs,lx-1,ly,lz)) add_face(m,blk,lx,ly,lz,2,t,ox,oy,oz);
+                if (face_open(blk,nbrs,lx+1,ly,lz)) add_face(m,blk,lx,ly,lz,3,t,ox,oy,oz);
+                if (face_open(blk,nbrs,lx,ly+1,lz)) add_face(m,blk,lx,ly,lz,4,t,ox,oy,oz);
+                if (face_open(blk,nbrs,lx,ly-1,lz)) add_face(m,blk,lx,ly,lz,5,t,ox,oy,oz);
             }
         }
     }
@@ -257,8 +275,9 @@ static void add_face_lod(KvMesh *m, int face, uint16_t type, float ox, float oy,
 
 void kv_mesh_generate_lod(KvMesh *m,
                           uint16_t blk[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
-                          int32_t cx, int32_t cy, int32_t cz, int step) {
-    if (step <= 1) { kv_mesh_generate(m, blk, cx, cy, cz); return; }
+                          int32_t cx, int32_t cy, int32_t cz, int step,
+                          const KvNeighbors *nbrs) {
+    if (step <= 1) { kv_mesh_generate(m, blk, cx, cy, cz, nbrs); return; }
     m->count = 0;
     float s = (float)step;
     for (int lx = 0; lx < KV_CHUNK_SIZE; lx += step) {

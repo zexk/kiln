@@ -74,6 +74,14 @@ void        kv_world_destroy(kv_world_t *world);
 /* Call every frame to stream chunks in/out and remesh dirty ones. */
 void kv_world_update(kv_world_t *world, vec3_t camera_pos);
 
+/* Change streaming radii in place. Chunks that stay in range keep their
+   loaded state and meshes; chunks that no longer fit the new capacity are
+   flushed and freed immediately, but everything else streams in/out
+   gradually through the normal kv_world_update() throttle on subsequent
+   calls — this does not block synchronously loading the whole new radius.
+   No-op if horiz_dist/vert_radius match the current values. */
+void kv_world_set_dist(kv_world_t *world, int horiz_dist, int vert_radius);
+
 /* Flush pending chunk saves to disk (safe to call from the game loop). */
 void kv_world_flush_saves(kv_world_t *world);
 

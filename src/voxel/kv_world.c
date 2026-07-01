@@ -139,6 +139,9 @@ static bool load_chunk(KvChunk *c, const char *save_dir) {
         if (!memcmp(sec_type,"PLTE",4)) {
             uint16_t cnt; if(!read_u16(f,&cnt)) break;
             if(cnt>256) cnt=256;
+            /* Only count entries fully parsed: a truncated section must not
+               leave pal_types[] garbage that BLKS would then index. */
+            uint16_t got=0;
             for (uint16_t i=0;i<cnt;i++) {
                 uint16_t len; if(!read_u16(f,&len)) break;
                 uint16_t copy=len<63?len:63;
@@ -148,8 +151,9 @@ static bool load_chunk(KvChunk *c, const char *save_dir) {
                 pal_types[i]=kv_block_id_from_string(pal_ids[i]);
                 if(pal_types[i]==KV_BLOCK_AIR&&strcmp(pal_ids[i],"kyub:air")!=0)
                     LOG_WARN(LOG_CAT_WORLD,"Unknown block '%s' in %s",pal_ids[i],path);
+                got=(uint16_t)(i+1);
             }
-            pal_count=cnt;
+            pal_count=got;
         } else if (!memcmp(sec_type,"BLKS",4)) {
             uint16_t sx,sy,sz; int enc;
             if(!read_u16(f,&sx)||!read_u16(f,&sy)||!read_u16(f,&sz)) break;
@@ -254,11 +258,45 @@ static void ht_remove(kv_world_t *w, int32_t cx, int32_t cy, int32_t cz) {
 
 /* ── Slot lifecycle ──────────────────────────────────────────────────────── */
 
+/* Gather face-adjacent neighbor block grids for LOD0 boundary face culling.
+   Missing (unloaded) neighbors are left NULL. */
+static KvNeighbors gather_neighbors(const kv_world_t *w, int32_t cx, int32_t cy, int32_t cz) {
+    KvNeighbors n = {0};
+    KvSlot *s;
+    if ((s = find_slot(w, cx-1, cy, cz))) n.xn = s->chunk->blocks;
+    if ((s = find_slot(w, cx+1, cy, cz))) n.xp = s->chunk->blocks;
+    if ((s = find_slot(w, cx, cy-1, cz))) n.yn = s->chunk->blocks;
+    if ((s = find_slot(w, cx, cy+1, cz))) n.yp = s->chunk->blocks;
+    if ((s = find_slot(w, cx, cy, cz-1))) n.zn = s->chunk->blocks;
+    if ((s = find_slot(w, cx, cy, cz+1))) n.zp = s->chunk->blocks;
+    return n;
+}
+
+/* If a chunk at (cx,cy,cz) is loaded and has an uploaded LOD0 mesh, mark it
+   dirty so it gets remeshed with up-to-date boundary face culling. */
+static void mark_neighbor_dirty0(kv_world_t *w, int32_t cx, int32_t cy, int32_t cz) {
+    KvSlot *n = find_slot(w, cx, cy, cz);
+    if (n && n->lod_valid[0]) n->lod_dirty[0] = true;
+}
+
+/* Call whenever a chunk's block data becomes visible/invisible to its
+   neighbors (loaded, unloaded, or edited at a boundary layer) so any
+   already-meshed neighbor picks up the change on the next update pass. */
+static void invalidate_neighbor_lod0(kv_world_t *w, int32_t cx, int32_t cy, int32_t cz) {
+    mark_neighbor_dirty0(w, cx-1, cy, cz);
+    mark_neighbor_dirty0(w, cx+1, cy, cz);
+    mark_neighbor_dirty0(w, cx, cy-1, cz);
+    mark_neighbor_dirty0(w, cx, cy+1, cz);
+    mark_neighbor_dirty0(w, cx, cy, cz-1);
+    mark_neighbor_dirty0(w, cx, cy, cz+1);
+}
+
 static void unload_slot(kv_world_t *w, int idx) {
     KvSlot *sl = &w->slots[idx]; if (!sl->active) return;
     if (sl->save_dirty) save_chunk(sl, w->save_dir);
     LOG_DEBUG(LOG_CAT_WORLD,"Unloaded chunk %d,%d,%d",(int)sl->chunk->cx,(int)sl->chunk->cy,(int)sl->chunk->cz);
     ht_remove(w, sl->chunk->cx, sl->chunk->cy, sl->chunk->cz);
+    invalidate_neighbor_lod0(w, sl->chunk->cx, sl->chunk->cy, sl->chunk->cz);
     for (int l=0;l<KV_LOD_LEVELS;l++) kv_mesh_free(&sl->meshes[l]);
     free(sl->chunk);
     memset(sl, 0, sizeof(KvSlot));
@@ -289,15 +327,17 @@ static void add_slot(kv_world_t *w, int32_t cx, int32_t cy, int32_t cz,
         }
 
         const int steps[KV_LOD_LEVELS] = LOD_STEPS;
+        KvNeighbors nbrs = gather_neighbors(w, cx, cy, cz);
         for (int l = lod_min; l < KV_LOD_LEVELS; l++) {
             kv_mesh_init(&sl->meshes[l]);
-            kv_mesh_generate_lod(&sl->meshes[l], sl->chunk->blocks, cx, cy, cz, steps[l]);
+            kv_mesh_generate_lod(&sl->meshes[l], sl->chunk->blocks, cx, cy, cz, steps[l], &nbrs);
             kv_mesh_upload(&sl->meshes[l]);
             sl->lod_valid[l] = true;
         }
         sl->active = true;
         w->count++;
         ht_insert(w, cx, cy, cz, i);
+        invalidate_neighbor_lod0(w, cx, cy, cz);
         LOG_DEBUG(LOG_CAT_WORLD,"Loaded chunk %d,%d,%d (slot %d, lod_min %d)",(int)cx,(int)cy,(int)cz,i,lod_min);
         return;
     }
@@ -421,16 +461,97 @@ void kv_world_update(kv_world_t *world, vec3_t camera_pos) {
     const int steps[KV_LOD_LEVELS] = LOD_STEPS;
     for (int i=0;i<world->cap;i++) {
         KvSlot *sl = &world->slots[i]; if (!sl->active) continue;
+        bool any_dirty = false;
+        for (int l=0;l<KV_LOD_LEVELS;l++) any_dirty |= sl->lod_dirty[l];
+        if (!any_dirty) continue;
+        KvNeighbors nbrs = gather_neighbors(world, sl->chunk->cx, sl->chunk->cy, sl->chunk->cz);
         for (int l=0;l<KV_LOD_LEVELS;l++) {
             if (!sl->lod_dirty[l]) continue;
             if (!sl->lod_valid[l]) kv_mesh_init(&sl->meshes[l]);
             kv_mesh_generate_lod(&sl->meshes[l], sl->chunk->blocks,
-                                 sl->chunk->cx, sl->chunk->cy, sl->chunk->cz, steps[l]);
+                                 sl->chunk->cx, sl->chunk->cy, sl->chunk->cz, steps[l], &nbrs);
             kv_mesh_upload(&sl->meshes[l]);
             sl->lod_valid[l] = true;
             sl->lod_dirty[l] = false;
         }
     }
+}
+
+void kv_world_set_dist(kv_world_t *world, int horiz_dist, int vert_radius) {
+    if (horiz_dist < 1) horiz_dist = 1;
+    if (vert_radius < 0) vert_radius = 0;
+    if (horiz_dist == world->horiz_dist && vert_radius == world->vert_radius) return;
+
+    int hs = 2*(horiz_dist+2)+1;
+    int vs = 2*(vert_radius+2)+1;
+    int new_cap = hs * hs * vs;
+
+    KvSlot *new_slots = calloc((size_t)new_cap, sizeof(KvSlot));
+    CORE_CHECK_ALLOC(new_slots);
+
+    /* Chunks evicted because they no longer fit — their neighbors' LOD0
+       meshes may have culled faces against them and need remeshing. Deferred
+       until after the ht/slots swap below so lookups resolve correctly. */
+    int32_t (*evicted)[3] = malloc(sizeof(int32_t[3]) * (size_t)world->cap);
+    CORE_CHECK_ALLOC(evicted);
+    int evicted_count = 0;
+
+    /* Move chunks that fit into the resized slot array; anything left over
+       (only possible when shrinking) is flushed and freed like a normal
+       unload since there's nowhere to put it. */
+    int new_count = 0;
+    for (int i = 0; i < world->cap; i++) {
+        KvSlot *sl = &world->slots[i];
+        if (!sl->active) continue;
+        if (new_count < new_cap) {
+            new_slots[new_count++] = *sl;
+        } else {
+            if (sl->save_dirty) save_chunk(sl, world->save_dir);
+            evicted[evicted_count][0] = sl->chunk->cx;
+            evicted[evicted_count][1] = sl->chunk->cy;
+            evicted[evicted_count][2] = sl->chunk->cz;
+            evicted_count++;
+            for (int l = 0; l < KV_LOD_LEVELS; l++) kv_mesh_free(&sl->meshes[l]);
+            free(sl->chunk);
+        }
+    }
+
+    free(world->slots);
+    world->slots      = new_slots;
+    world->cap        = new_cap;
+    world->count      = new_count;
+    world->horiz_dist  = horiz_dist;
+    world->vert_radius = vert_radius;
+
+    /* Hash table and pending-load buffer are sized off `cap` — rebuild both. */
+    free(world->ht);
+    world->ht_cap = 1;
+    while (world->ht_cap < world->cap * 2) world->ht_cap <<= 1;
+    world->ht = malloc((size_t)world->ht_cap * sizeof(KvHtEntry));
+    CORE_CHECK_ALLOC(world->ht);
+    memset(world->ht, 0xFF, (size_t)world->ht_cap * sizeof(KvHtEntry));
+    world->ht_tomb = 0;
+    for (int i = 0; i < world->count; i++)
+        ht_insert(world, world->slots[i].chunk->cx, world->slots[i].chunk->cy, world->slots[i].chunk->cz, i);
+
+    free(world->pending_buf);
+    world->pending_buf = malloc((size_t)world->cap * sizeof(KvPending));
+    CORE_CHECK_ALLOC(world->pending_buf);
+
+    /* Now that ht/slots point at the resized arrays, restore boundary faces
+       on any surviving neighbor of an evicted chunk. */
+    for (int i = 0; i < evicted_count; i++)
+        invalidate_neighbor_lod0(world, evicted[i][0], evicted[i][1], evicted[i][2]);
+    free(evicted);
+
+    /* Force kv_world_update to re-evaluate load/unload ranges on its next
+       call. world->count is nonzero (unless the world was already empty),
+       so the "first load" synchronous bypass won't trigger — newly-needed
+       chunks stream in gradually through the normal per-frame limit. */
+    world->last_cam_cx = INT32_MIN;
+    world->last_cam_cy = INT32_MIN;
+    world->last_cam_cz = INT32_MIN;
+    world->has_pending_load = false;
 }
 
 void kv_world_flush_saves(kv_world_t *world) {
@@ -470,6 +591,15 @@ void kv_world_set_block(kv_world_t *world, int x, int y, int z, uint16_t type) {
     for (int l=0;l<KV_LOD_LEVELS;l++)
         if (sl->lod_valid[l]) sl->lod_dirty[l] = true;
     sl->save_dirty=true;
+
+    /* Edits on a chunk-boundary layer can also change what a neighbor's
+       LOD0 mesh culled against this chunk. */
+    if (lx==0)               mark_neighbor_dirty0(world, cx-1, cy, cz);
+    if (lx==KV_CHUNK_SIZE-1)  mark_neighbor_dirty0(world, cx+1, cy, cz);
+    if (ly==0)               mark_neighbor_dirty0(world, cx, cy-1, cz);
+    if (ly==KV_CHUNK_SIZE-1)  mark_neighbor_dirty0(world, cx, cy+1, cz);
+    if (lz==0)               mark_neighbor_dirty0(world, cx, cy, cz-1);
+    if (lz==KV_CHUNK_SIZE-1)  mark_neighbor_dirty0(world, cx, cy, cz+1);
 }
 
 void kv_world_set_meta(kv_world_t *world, int x, int y, int z, uint16_t meta) {

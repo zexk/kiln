@@ -71,13 +71,30 @@ typedef struct {
     R_Buffer  vbo;
 } KvMesh;
 
+/* Face-adjacent neighbor chunks' block grids, used only at the finest LOD
+   (step 1) to cull faces that are occluded by an already-loaded neighbor
+   across a chunk boundary. A NULL field means that neighbor isn't loaded —
+   the boundary face is drawn rather than risk culling into unloaded/void
+   space. Coarser LODs don't use this (their super-block faces are cheap
+   enough that boundary overdraw isn't worth the extra bookkeeping). */
+typedef struct {
+    uint16_t (*xn)[KV_CHUNK_SIZE][KV_CHUNK_SIZE]; /* -x neighbor */
+    uint16_t (*xp)[KV_CHUNK_SIZE][KV_CHUNK_SIZE]; /* +x neighbor */
+    uint16_t (*yn)[KV_CHUNK_SIZE][KV_CHUNK_SIZE]; /* -y neighbor */
+    uint16_t (*yp)[KV_CHUNK_SIZE][KV_CHUNK_SIZE]; /* +y neighbor */
+    uint16_t (*zn)[KV_CHUNK_SIZE][KV_CHUNK_SIZE]; /* -z neighbor */
+    uint16_t (*zp)[KV_CHUNK_SIZE][KV_CHUNK_SIZE]; /* +z neighbor */
+} KvNeighbors;
+
 void kv_mesh_init(KvMesh *m);
 void kv_mesh_generate(KvMesh *m,
                       uint16_t blocks[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
-                      int32_t cx, int32_t cy, int32_t cz);
+                      int32_t cx, int32_t cy, int32_t cz,
+                      const KvNeighbors *nbrs);
 void kv_mesh_generate_lod(KvMesh *m,
                           uint16_t blocks[KV_CHUNK_SIZE][KV_CHUNK_SIZE][KV_CHUNK_SIZE],
-                          int32_t cx, int32_t cy, int32_t cz, int step);
+                          int32_t cx, int32_t cy, int32_t cz, int step,
+                          const KvNeighbors *nbrs);
 void kv_mesh_upload(KvMesh *m);
 void kv_mesh_free(KvMesh *m);
 
